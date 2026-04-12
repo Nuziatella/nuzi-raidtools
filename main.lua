@@ -18,7 +18,7 @@ local ListManager = loadModule("list_manager")
 local addon = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "0.1.19",
+    version = "1.0.0",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -26,6 +26,7 @@ local SETTINGS_PATH = "nuzi-raidtools/.data/settings.txt"
 local LEGACY_SETTINGS_PATH = "nuzi-raidtools/settings.txt"
 local WHITELISTS_PATH = "nuzi-raidtools/.data/whitelists.txt"
 local LEGACY_WHITELISTS_PATH = "nuzi-raidtools/whitelists.txt"
+local LEGACY_EXPEDITION_WHITELIST_PATH = "nuzi-raidtools/expedition_whitelist.txt"
 local BLACKLIST_PATH = "nuzi-raidtools/.data/blacklist.txt"
 local LEGACY_BLACKLIST_PATH = "nuzi-raidtools/blacklist.txt"
 local GIVE_LEAD_WHITELIST_PATH = "nuzi-raidtools/.data/give_lead_whitelist.txt"
@@ -173,6 +174,42 @@ local function readDataFileWithLegacy(path, legacyPath)
     return nil, false
 end
 
+local function normalizeNameList(value)
+    if type(value) ~= "table" then
+        return nil
+    end
+    local out = {}
+    local seen = {}
+    for _, entry in ipairs(value) do
+        local formatted = Utils.FormatName(entry)
+        local key = normalizeKey(formatted)
+        if key ~= "" and not seen[key] then
+            seen[key] = true
+            table.insert(out, formatted)
+        end
+    end
+    return out
+end
+
+local function importLegacyExpeditionWhitelist(settings)
+    if type(settings) ~= "table" then
+        return false
+    end
+    local legacyList = normalizeNameList(readDataFile(LEGACY_EXPEDITION_WHITELIST_PATH))
+    if type(legacyList) ~= "table" or #legacyList == 0 then
+        return false
+    end
+    if type(settings.whitelists) ~= "table" then
+        settings.whitelists = {}
+    end
+    local existing = normalizeNameList(settings.whitelists.expedition)
+    if type(existing) == "table" and #existing > 0 then
+        return false
+    end
+    settings.whitelists.expedition = legacyList
+    return true
+end
+
 local function writeDataFile(path, payload)
     if api.File ~= nil and api.File.Write ~= nil then
         pcall(function()
@@ -250,6 +287,9 @@ local function getSettings()
         end
         if type(State.settings.give_lead_whitelist) ~= "table" then
             State.settings.give_lead_whitelist = deepCopy(DEFAULT_GIVE_LEAD_WHITELIST)
+        end
+        if importLegacyExpeditionWhitelist(State.settings) then
+            migrated = true
         end
         if not tableHasEntries(State.settings.enabled_whitelists) then
             local selected = tostring(State.settings.active_whitelist or "")
