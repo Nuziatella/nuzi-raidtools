@@ -25,7 +25,7 @@ local ListManager = loadModule("list_manager")
 local addon = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "1.0.0",
+    version = "1.0.1",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
