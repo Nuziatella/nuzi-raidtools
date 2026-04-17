@@ -1,15 +1,10 @@
 local api = require("api")
+local Core = api._NuziCore or require("nuzi-core/core")
+local Require = Core.Require
 
 local function loadModule(name)
-    local ok, mod = pcall(require, "nuzi-raidtools/" .. name)
-    if ok then
-        return mod
-    end
-    ok, mod = pcall(require, "nuzi-raidtools." .. name)
-    if ok then
-        return mod
-    end
-    return nil
+    local mod = Require.Addon("nuzi-raidtools", name)
+    return mod
 end
 
 local Utils = loadModule("utils")

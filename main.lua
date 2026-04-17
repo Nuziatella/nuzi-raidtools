@@ -1,13 +1,20 @@
 local api = require("api")
+local Core = api._NuziCore or require("nuzi-core/core")
+local Require = Core.Require
+local Log = Core.Log
+local Events = Core.Events
+local Settings = Core.Settings
+local Positioning = Core.UI.Positioning
+
+local logger = Log.Create("Nuzi Raidtools")
 
 local function loadModule(name)
-    local ok, mod = pcall(require, "nuzi-raidtools/" .. name)
-    if ok then
+    local mod, _, errors = Require.Addon("nuzi-raidtools", name)
+    if mod ~= nil then
         return mod
     end
-    ok, mod = pcall(require, "nuzi-raidtools." .. name)
-    if ok then
-        return mod
+    if type(errors) == "table" and #errors > 0 then
+        logger:Err("module load failed [" .. tostring(name) .. "]: " .. Require.DescribeErrors(errors))
     end
     return nil
 end
@@ -56,6 +63,7 @@ local DEFAULT_GIVE_LEAD_WHITELIST = {}
 
 local State = {
     settings = nil,
+    events = nil,
     blacklist_lookup = {},
     enabled_whitelist_lookup = {},
     give_lead_whitelist_lookup = {},
@@ -122,58 +130,6 @@ local function ensureDefaults(dst, defaults)
     end
 end
 
-local function readSettings()
-    if api.File ~= nil and api.File.Read ~= nil then
-        local ok, res = pcall(function()
-            return api.File:Read(SETTINGS_PATH)
-        end)
-        if ok and type(res) == "table" then
-            return res, false
-        end
-        ok, res = pcall(function()
-            return api.File:Read(LEGACY_SETTINGS_PATH)
-        end)
-        if ok and type(res) == "table" then
-            return res, true
-        end
-    end
-    if api.GetSettings ~= nil then
-        local ok, res = pcall(function()
-            return api.GetSettings("nuzi-raidtools")
-        end)
-        if ok and type(res) == "table" then
-            return res, false
-        end
-    end
-    return {}, false
-end
-
-local function readDataFile(path)
-    if api.File ~= nil and api.File.Read ~= nil then
-        local ok, res = pcall(function()
-            return api.File:Read(path)
-        end)
-        if ok and type(res) == "table" then
-            return res
-        end
-    end
-    return nil
-end
-
-local function readDataFileWithLegacy(path, legacyPath)
-    local value = readDataFile(path)
-    if type(value) == "table" then
-        return value, false
-    end
-    if type(legacyPath) == "string" and legacyPath ~= "" then
-        local legacyValue = readDataFile(legacyPath)
-        if type(legacyValue) == "table" then
-            return legacyValue, true
-        end
-    end
-    return nil, false
-end
-
 local function normalizeNameList(value)
     if type(value) ~= "table" then
         return nil
@@ -191,32 +147,137 @@ local function normalizeNameList(value)
     return out
 end
 
+local function normalizeWhitelistsTable(value)
+    if type(value) ~= "table" then
+        return nil
+    end
+    local out = {}
+    for key, list in pairs(value) do
+        local listName = trimText(key)
+        if listName ~= "" then
+            out[listName] = normalizeNameList(list) or {}
+        end
+    end
+    return out
+end
+
+local function replaceTableContents(target, replacement)
+    if type(target) ~= "table" then
+        return
+    end
+    for key in pairs(target) do
+        target[key] = nil
+    end
+    for key, value in pairs(replacement or {}) do
+        target[key] = value
+    end
+end
+
+local function readLegacyTable(path)
+    local parsed = Settings.ReadFlexibleTable(path, {
+        mode = "serialized_then_flat",
+        raw_text_fallback = true
+    })
+    if type(parsed) == "table" then
+        return parsed
+    end
+    return nil
+end
+
 local function importLegacyExpeditionWhitelist(settings)
     if type(settings) ~= "table" then
         return false
     end
-    local legacyList = normalizeNameList(readDataFile(LEGACY_EXPEDITION_WHITELIST_PATH))
+    local legacyList = normalizeNameList(readLegacyTable(LEGACY_EXPEDITION_WHITELIST_PATH))
     if type(legacyList) ~= "table" or #legacyList == 0 then
         return false
     end
-    if type(settings.whitelists) ~= "table" then
-        settings.whitelists = {}
-    end
-    local existing = normalizeNameList(settings.whitelists.expedition)
+    local existing = normalizeNameList(settings.expedition)
     if type(existing) == "table" and #existing > 0 then
         return false
     end
-    settings.whitelists.expedition = legacyList
+    settings.expedition = legacyList
     return true
 end
 
-local function writeDataFile(path, payload)
-    if api.File ~= nil and api.File.Write ~= nil then
-        pcall(function()
-            api.File:Write(path, payload)
-        end)
+local MainStore = Settings.CreateAddonStore({
+    ADDON_ID = "nuzi-raidtools",
+    ADDON_NAME = addon.name,
+    SETTINGS_FILE_PATH = SETTINGS_PATH,
+    LEGACY_SETTINGS_FILE_PATH = LEGACY_SETTINGS_PATH,
+    DEFAULT_SETTINGS = DEFAULT_SETTINGS
+}, {
+    prune_unknown = true,
+    read_mode = "serialized_then_flat",
+    write_mode = "serialized_then_flat",
+    read_raw_text_fallback = true,
+    write_mirror_paths = { LEGACY_SETTINGS_PATH },
+    normalize = function(settings)
+        ensureDefaults(settings, DEFAULT_SETTINGS)
+        if type(settings.char_roles) ~= "table" then
+            settings.char_roles = {}
+        end
+        if type(settings.enabled_whitelists) ~= "table" then
+            settings.enabled_whitelists = {}
+        end
+        settings.lead_code_word = trimText(settings.lead_code_word or "give lead")
+        if settings.lead_code_word == "" then
+            settings.lead_code_word = "give lead"
+        end
+        if not tableHasEntries(settings.enabled_whitelists) then
+            local selected = tostring(settings.active_whitelist or "")
+            if selected ~= "" and selected ~= "Select Whitelist" then
+                settings.enabled_whitelists[normalizeKey(selected)] = true
+            end
+        end
     end
+})
+
+local function createSidecarStore(path, legacyPath, defaults, label, normalize)
+    return Settings.CreateSidecarStore({
+        settings_file_path = path,
+        legacy_settings_file_path = legacyPath,
+        defaults = deepCopy(defaults or {}),
+        log_name = addon.name .. "/" .. tostring(label or "Data"),
+        use_api_settings = false,
+        save_global_settings = false,
+        read_mode = "serialized_then_flat",
+        write_mode = "serialized_then_flat",
+        read_raw_text_fallback = true,
+        write_mirror_paths = { legacyPath },
+        normalize = normalize
+    })
 end
+
+local WhitelistStore = createSidecarStore(
+    WHITELISTS_PATH,
+    LEGACY_WHITELISTS_PATH,
+    DEFAULT_WHITELISTS,
+    "Whitelists",
+    function(settings)
+        replaceTableContents(settings, normalizeWhitelistsTable(settings) or {})
+    end
+)
+
+local BlacklistStore = createSidecarStore(
+    BLACKLIST_PATH,
+    LEGACY_BLACKLIST_PATH,
+    DEFAULT_BLACKLIST,
+    "Blacklist",
+    function(settings)
+        replaceTableContents(settings, normalizeNameList(settings) or {})
+    end
+)
+
+local GiveLeadWhitelistStore = createSidecarStore(
+    GIVE_LEAD_WHITELIST_PATH,
+    LEGACY_GIVE_LEAD_WHITELIST_PATH,
+    DEFAULT_GIVE_LEAD_WHITELIST,
+    "GiveLeadWhitelist",
+    function(settings)
+        replaceTableContents(settings, normalizeNameList(settings) or {})
+    end
+)
 
 local function buildSettingsPayload(settings)
     return {
@@ -242,53 +303,58 @@ local function saveSettings()
     if State.settings == nil then
         return
     end
-    if api.SaveSettings ~= nil then
-        pcall(function()
-            api.SaveSettings()
-        end)
-    end
-    writeDataFile(SETTINGS_PATH, buildSettingsPayload(State.settings))
-    writeDataFile(WHITELISTS_PATH, State.settings.whitelists or {})
-    writeDataFile(BLACKLIST_PATH, State.settings.blacklist or {})
-    writeDataFile(GIVE_LEAD_WHITELIST_PATH, State.settings.give_lead_whitelist or {})
+    State.settings.whitelists = normalizeWhitelistsTable(State.settings.whitelists) or {}
+    State.settings.blacklist = normalizeNameList(State.settings.blacklist) or {}
+    State.settings.give_lead_whitelist = normalizeNameList(State.settings.give_lead_whitelist) or {}
+
+    MainStore.settings = buildSettingsPayload(State.settings)
+    WhitelistStore.settings = State.settings.whitelists
+    BlacklistStore.settings = State.settings.blacklist
+    GiveLeadWhitelistStore.settings = State.settings.give_lead_whitelist
+
+    MainStore:Save()
+    WhitelistStore:Save()
+    BlacklistStore:Save()
+    GiveLeadWhitelistStore:Save()
 end
 
 local function getSettings()
     if type(State.settings) ~= "table" then
         local migrated = false
-        State.settings, migrated = readSettings()
-        local whitelists, whitelistsMigrated = readDataFileWithLegacy(WHITELISTS_PATH, LEGACY_WHITELISTS_PATH)
-        local blacklist, blacklistMigrated = readDataFileWithLegacy(BLACKLIST_PATH, LEGACY_BLACKLIST_PATH)
-        local giveLeadWhitelist, giveLeadWhitelistMigrated = readDataFileWithLegacy(GIVE_LEAD_WHITELIST_PATH, LEGACY_GIVE_LEAD_WHITELIST_PATH)
-        if type(whitelists) == "table" then
-            State.settings.whitelists = whitelists
-        end
-        if type(blacklist) == "table" then
-            State.settings.blacklist = blacklist
-        end
-        if type(giveLeadWhitelist) == "table" then
-            State.settings.give_lead_whitelist = giveLeadWhitelist
-        end
-        if whitelistsMigrated or blacklistMigrated or giveLeadWhitelistMigrated then
-            migrated = true
-        end
+        local mainSettings, mainMeta = MainStore:Ensure()
+        local whitelists, whitelistsMeta = WhitelistStore:Ensure()
+        local blacklist, blacklistMeta = BlacklistStore:Ensure()
+        local giveLeadWhitelist, giveLeadWhitelistMeta = GiveLeadWhitelistStore:Ensure()
+
+        State.settings = deepCopy(mainSettings or {})
         ensureDefaults(State.settings, DEFAULT_SETTINGS)
         if type(State.settings.char_roles) ~= "table" then
             State.settings.char_roles = {}
         end
-        if type(State.settings.whitelists) ~= "table" then
-            State.settings.whitelists = deepCopy(DEFAULT_WHITELISTS)
-        end
         if type(State.settings.enabled_whitelists) ~= "table" then
             State.settings.enabled_whitelists = {}
         end
-        if type(State.settings.blacklist) ~= "table" then
-            State.settings.blacklist = deepCopy(DEFAULT_BLACKLIST)
+        State.settings.whitelists = normalizeWhitelistsTable(whitelists) or deepCopy(DEFAULT_WHITELISTS)
+        State.settings.blacklist = normalizeNameList(blacklist) or deepCopy(DEFAULT_BLACKLIST)
+        State.settings.give_lead_whitelist = normalizeNameList(giveLeadWhitelist) or deepCopy(DEFAULT_GIVE_LEAD_WHITELIST)
+        State.settings.lead_code_word = trimText(State.settings.lead_code_word or "give lead")
+        if State.settings.lead_code_word == "" then
+            State.settings.lead_code_word = "give lead"
         end
-        if type(State.settings.give_lead_whitelist) ~= "table" then
-            State.settings.give_lead_whitelist = deepCopy(DEFAULT_GIVE_LEAD_WHITELIST)
+
+        if type(mainMeta) == "table" and mainMeta.migrated then
+            migrated = true
         end
-        if importLegacyExpeditionWhitelist(State.settings) then
+        if type(whitelistsMeta) == "table" and whitelistsMeta.migrated then
+            migrated = true
+        end
+        if type(blacklistMeta) == "table" and blacklistMeta.migrated then
+            migrated = true
+        end
+        if type(giveLeadWhitelistMeta) == "table" and giveLeadWhitelistMeta.migrated then
+            migrated = true
+        end
+        if importLegacyExpeditionWhitelist(State.settings.whitelists) then
             migrated = true
         end
         if not tableHasEntries(State.settings.enabled_whitelists) then
@@ -306,17 +372,15 @@ local function getSettings()
     if type(State.settings.char_roles) ~= "table" then
         State.settings.char_roles = {}
     end
-    if type(State.settings.whitelists) ~= "table" then
-        State.settings.whitelists = deepCopy(DEFAULT_WHITELISTS)
-    end
     if type(State.settings.enabled_whitelists) ~= "table" then
         State.settings.enabled_whitelists = {}
     end
-    if type(State.settings.blacklist) ~= "table" then
-        State.settings.blacklist = deepCopy(DEFAULT_BLACKLIST)
-    end
-    if type(State.settings.give_lead_whitelist) ~= "table" then
-        State.settings.give_lead_whitelist = deepCopy(DEFAULT_GIVE_LEAD_WHITELIST)
+    State.settings.whitelists = normalizeWhitelistsTable(State.settings.whitelists) or deepCopy(DEFAULT_WHITELISTS)
+    State.settings.blacklist = normalizeNameList(State.settings.blacklist) or deepCopy(DEFAULT_BLACKLIST)
+    State.settings.give_lead_whitelist = normalizeNameList(State.settings.give_lead_whitelist) or deepCopy(DEFAULT_GIVE_LEAD_WHITELIST)
+    State.settings.lead_code_word = trimText(State.settings.lead_code_word or "give lead")
+    if State.settings.lead_code_word == "" then
+        State.settings.lead_code_word = "give lead"
     end
     if not tableHasEntries(State.settings.enabled_whitelists) then
         local selected = tostring(State.settings.active_whitelist or "")
@@ -1107,37 +1171,32 @@ local function clearRaidManagerWidgets()
     State.raid_manager_original_height = nil
 end
 
+local FloatingButtonPositions = Positioning.CreateNamedPositionManager({
+    get_settings = function()
+        return getSettings()
+    end,
+    save_settings = function()
+        saveSettings()
+    end,
+    mappings = {
+        floating_button = {
+            x = "floating_button_x",
+            y = "floating_button_y"
+        }
+    },
+    require_shift = false
+})
+
 local function createFloatingButton()
     if State.floating_button ~= nil then
         return
     end
-    local settings = getSettings()
     local button = Utils.CreateButton("UIParent", "nuziRaidtoolsFloatingRecruit", "Start Auto-Invite", 140, 30)
-    button:AddAnchor("TOPLEFT", "UIParent", settings.floating_button_x, settings.floating_button_y)
-
-    function button:OnDragStart()
-        button:StartMoving()
-        api.Cursor:ClearCursor()
-        api.Cursor:SetCursorImage(CURSOR_PATH.MOVE, 0, 0)
-    end
-
-    function button:OnDragStop()
-        button:StopMovingOrSizing()
-        local currentX, currentY = button:GetEffectiveOffset()
-        settings.floating_button_x = currentX
-        settings.floating_button_y = currentY
-        saveSettings()
-        api.Cursor:ClearCursor()
-    end
-
-    button:SetHandler("OnDragStart", button.OnDragStart)
-    button:SetHandler("OnDragStop", button.OnDragStop)
-    if button.RegisterForDrag ~= nil then
-        button:RegisterForDrag("LeftButton")
-    end
-    if button.EnableDrag ~= nil then
-        button:EnableDrag(true)
-    end
+    FloatingButtonPositions:ApplyAndBind(button, nil, "floating_button", {
+        anchor = "TOPLEFT",
+        relative_to = "UIParent",
+        target_anchor = "TOPLEFT"
+    })
     button:SetHandler("OnClick", toggleRecruiting)
     State.floating_button = button
     syncRecruitWidgets()
@@ -1362,30 +1421,26 @@ local function buildRaidManagerUi()
         local idx = activeWhitelistDropdown:GetSelectedIndex()
         local selected = activeWhitelistDropdown.dropdownItem ~= nil and activeWhitelistDropdown.dropdownItem[idx] or nil
         if selected == nil or selected == "Select Whitelist" then
-            api.Log:Err("[Nuzi Raidtools] No whitelist selected.")
+            logger:Err("No whitelist selected.")
             return
         end
         local sourceList = settings.whitelists[selected]
         if type(sourceList) ~= "table" or #sourceList == 0 then
-            api.Log:Err("[Nuzi Raidtools] Selected whitelist is empty.")
+            logger:Err("Selected whitelist is empty.")
             return
         end
         local invited = inviteNamesToRaid(sourceList)
-        if api.Log ~= nil and api.Log.Info ~= nil then
-            api.Log:Info("[Nuzi Raidtools] Invited " .. tostring(invited) .. " selected whitelist member(s).")
-        end
+        logger:Info("Invited " .. tostring(invited) .. " selected whitelist member(s).")
     end)
 
     inviteEnabledButton:SetHandler("OnClick", function()
         local names = collectEnabledWhitelistMembers(settings)
         if #names == 0 then
-            api.Log:Err("[Nuzi Raidtools] No enabled whitelist members found.")
+            logger:Err("No enabled whitelist members found.")
             return
         end
         local invited = inviteNamesToRaid(names)
-        if api.Log ~= nil and api.Log.Info ~= nil then
-            api.Log:Info("[Nuzi Raidtools] Invited " .. tostring(invited) .. " enabled whitelist member(s).")
-        end
+        logger:Info("Invited " .. tostring(invited) .. " enabled whitelist member(s).")
     end)
 
     local whitelistAutoInviteCheckbox = Utils.CreateCheckbox(sidePanel, "nuziRaidtoolsWhitelistAutoInvite")
@@ -1754,17 +1809,20 @@ local function onLoad()
     createFloatingButton()
     buildRaidManagerUi()
     applySavedRole()
-    api.On("raid_role_changed", onRoleChanged)
-    api.On("TEAM_MEMBERS_CHANGED", onTeamChanged)
-    api.On("CHAT_MESSAGE", onChatMessage)
-    api.On("UI_RELOADED", onUiReloaded)
+    State.events = Events.Create({
+        logger = logger
+    })
+    State.events:OnSafe("raid_role_changed", "raid_role_changed", onRoleChanged)
+    State.events:OnSafe("TEAM_MEMBERS_CHANGED", "TEAM_MEMBERS_CHANGED", onTeamChanged)
+    State.events:OnSafe("CHAT_MESSAGE", "CHAT_MESSAGE", onChatMessage)
+    State.events:OnSafe("UI_RELOADED", "UI_RELOADED", onUiReloaded)
 end
 
 local function onUnload()
-    api.On("raid_role_changed", function() end)
-    api.On("TEAM_MEMBERS_CHANGED", function() end)
-    api.On("CHAT_MESSAGE", function() end)
-    api.On("UI_RELOADED", function() end)
+    if State.events ~= nil then
+        State.events:ClearAll()
+        State.events = nil
+    end
     clearRaidManagerWidgets()
     ListManager.Free()
     if State.floating_button ~= nil then
