@@ -15,11 +15,20 @@ local ListManager = {
     callbacks = nil,
     widgets = {},
     scroll_children = {},
-    refresh_counter = 0
+    refresh_counter = 0,
+    selected_list_name = nil
 }
 
 local RESERVED_BLACKLIST = "Blacklist"
 local RESERVED_GIVE_LEAD_WHITELIST = "Give Lead Whitelist"
+local THEME = {
+    title = { 0.98, 0.90, 0.72, 1 },
+    heading = { 0.96, 0.88, 0.70, 1 },
+    text = { 0.95, 0.93, 0.90, 1 },
+    hint = { 0.78, 0.74, 0.68, 1 },
+    warning = { 1, 0.45, 0.32, 1 }
+}
+local updateDisplay
 
 local function normalizeKey(value)
     local text = tostring(value or ""):gsub("^%s*(.-)%s*$", "%1")
@@ -27,6 +36,116 @@ local function normalizeKey(value)
         return ""
     end
     return string.lower(text)
+end
+
+local function safeShow(widget, visible)
+    if widget ~= nil and widget.Show ~= nil then
+        widget:Show(visible and true or false)
+    end
+end
+
+local function createEmptyChild(parent, id, x, y, width, height)
+    if parent == nil or parent.CreateChildWidget == nil then
+        return nil
+    end
+    local widget = parent:CreateChildWidget("emptywidget", id, 0, true)
+    if widget == nil then
+        return nil
+    end
+    if widget.AddAnchor ~= nil then
+        widget:AddAnchor("TOPLEFT", parent, x or 0, y or 0)
+    end
+    if widget.SetExtent ~= nil then
+        widget:SetExtent(width or 100, height or 100)
+    end
+    safeShow(widget, true)
+    return widget
+end
+
+local function applyPanelBackground(widget, alpha)
+    if widget == nil then
+        return nil
+    end
+    local background = nil
+    if widget.CreateNinePartDrawable ~= nil and TEXTURE_PATH ~= nil and TEXTURE_PATH.HUD ~= nil then
+        background = widget:CreateNinePartDrawable(TEXTURE_PATH.HUD, "background")
+        if background ~= nil and background.SetTextureInfo ~= nil then
+            background:SetTextureInfo("bg_quest")
+        end
+    elseif widget.CreateColorDrawable ~= nil then
+        background = widget:CreateColorDrawable(0.08, 0.07, 0.05, alpha or 0.86, "background")
+    end
+    if background ~= nil then
+        if background.SetColor ~= nil then
+            background:SetColor(0.08, 0.07, 0.05, tonumber(alpha) or 0.86)
+        end
+        background:AddAnchor("TOPLEFT", widget, 0, 0)
+        background:AddAnchor("BOTTOMRIGHT", widget, 0, 0)
+    end
+    return background
+end
+
+local function applyPanelAccent(widget, height, alpha)
+    if widget == nil or widget.CreateColorDrawable == nil then
+        return nil
+    end
+    local accent = widget:CreateColorDrawable(0.94, 0.80, 0.48, alpha or 0.12, "overlay")
+    accent:AddAnchor("TOPLEFT", widget, 0, 0)
+    accent:AddAnchor("TOPRIGHT", widget, 0, 0)
+    if accent.SetHeight ~= nil then
+        accent:SetHeight(height or 44)
+    else
+        accent:SetExtent(1, height or 44)
+    end
+    return accent
+end
+
+local function applyPanelDivider(widget, topInset, leftInset, rightInset, alpha)
+    if widget == nil or widget.CreateColorDrawable == nil then
+        return nil
+    end
+    local divider = widget:CreateColorDrawable(0.88, 0.76, 0.46, alpha or 0.16, "overlay")
+    divider:AddAnchor("TOPLEFT", widget, leftInset or 18, topInset or 58)
+    divider:AddAnchor("TOPRIGHT", widget, rightInset or -18, topInset or 58)
+    if divider.SetHeight ~= nil then
+        divider:SetHeight(1)
+    else
+        divider:SetExtent(1, 1)
+    end
+    return divider
+end
+
+local function createThemedLabel(parent, id, text, fontSize, x, y, width, tone)
+    local color = THEME[tone or "text"] or THEME.text
+    local label = Utils.CreateLabel(parent, id, text, fontSize or 12, ALIGN.LEFT, color[1], color[2], color[3], color[4])
+    if label == nil then
+        return nil
+    end
+    if label.SetExtent ~= nil then
+        label:SetExtent(width or 220, math.max(18, (tonumber(fontSize) or 12) + 8))
+    end
+    if label.SetAutoResize ~= nil then
+        label:SetAutoResize(false)
+    end
+    if label.SetLimitWidth ~= nil then
+        local ok = pcall(function()
+            label:SetLimitWidth(width or 220)
+        end)
+        if not ok then
+            label:SetLimitWidth(true)
+        end
+    end
+    if label.style ~= nil then
+        if label.style.SetShadow ~= nil then
+            label.style:SetShadow(true)
+        end
+        if label.style.SetEllipsis ~= nil then
+            label.style:SetEllipsis(false)
+        end
+    end
+    label:AddAnchor("TOPLEFT", parent, x or 0, y or 0)
+    safeShow(label, true)
+    return label
 end
 
 local function clearScrollChildren()
@@ -111,18 +230,35 @@ local function syncSelectionWidgets(listName)
         toggleLabel:Show(false)
         return
     end
+    local enabled = isSelectedListEnabled(listName)
     if listName == RESERVED_GIVE_LEAD_WHITELIST then
-        toggleLabel:SetText("Use this list for give lead")
+        if enabled then
+            toggleLabel:SetText("Status: Give lead approval enabled")
+            toggleButton:SetText("Disable Lead")
+        else
+            toggleLabel:SetText("Status: Give lead approval disabled")
+            toggleButton:SetText("Enable Lead")
+        end
     else
-        toggleLabel:SetText("Use this whitelist for auto-invite")
-    end
-    if isSelectedListEnabled(listName) then
-        toggleButton:SetText("Enabled")
-    else
-        toggleButton:SetText("Disabled")
+        if enabled then
+            toggleLabel:SetText("Status: Whitelist automation enabled")
+            toggleButton:SetText("Disable List")
+        else
+            toggleLabel:SetText("Status: Whitelist automation disabled")
+            toggleButton:SetText("Enable List")
+        end
     end
     toggleButton:Show(true)
     toggleLabel:Show(true)
+end
+
+local function clearSelectionDisplay()
+    local blacklistWarning = ListManager.widgets.blacklist_warning
+    if blacklistWarning ~= nil and blacklistWarning.Show ~= nil then
+        blacklistWarning:Show(false)
+    end
+    syncSelectionWidgets(nil)
+    clearScrollChildren()
 end
 
 local function notifyListChanged(listName)
@@ -222,10 +358,67 @@ local function collectCurrentRaidMemberNames()
     return out
 end
 
-local function refreshManagerDropdown()
+local function getDropdownNames()
+    local dropdown = ListManager.widgets.whitelist_dropdown
+    if dropdown == nil or type(dropdown.dropdownItem) ~= "table" then
+        return {}
+    end
+    return dropdown.dropdownItem
+end
+
+local function getSelectedListName()
+    local dropdown = ListManager.widgets.whitelist_dropdown
+    local names = getDropdownNames()
+    if dropdown ~= nil and dropdown.GetSelectedIndex ~= nil then
+        local selectedIndex = tonumber(dropdown:GetSelectedIndex()) or 0
+        if selectedIndex > 0 and names[selectedIndex] ~= nil then
+            return names[selectedIndex]
+        end
+    end
+    return ListManager.selected_list_name
+end
+
+local function selectListByName(listName)
+    local dropdown = ListManager.widgets.whitelist_dropdown
+    local names = getDropdownNames()
+    local targetIndex = nil
+
+    if type(listName) == "string" and listName ~= "" then
+        for index, name in ipairs(names) do
+            if name == listName then
+                targetIndex = index
+                break
+            end
+        end
+    end
+
+    if targetIndex == nil and #names > 0 then
+        targetIndex = 1
+    end
+
+    local selectedName = targetIndex ~= nil and names[targetIndex] or nil
+    ListManager.selected_list_name = selectedName
+
+    if dropdown ~= nil and dropdown.Select ~= nil and targetIndex ~= nil then
+        dropdown:Select(targetIndex)
+    end
+
+    if updateDisplay ~= nil then
+        if selectedName ~= nil and selectedName ~= "" then
+            updateDisplay(selectedName)
+        else
+            clearSelectionDisplay()
+        end
+    end
+
+    return selectedName
+end
+
+local function refreshManagerDropdown(targetListName)
     if ListManager.widgets.whitelist_dropdown == nil or ListManager.settings == nil then
         return
     end
+    local desiredListName = targetListName or getSelectedListName()
     local names = {
         RESERVED_BLACKLIST,
         RESERVED_GIVE_LEAD_WHITELIST
@@ -257,12 +450,42 @@ local function refreshManagerDropdown()
     if ListManager.callbacks ~= nil and ListManager.callbacks.OnWhitelistUpdate ~= nil then
         ListManager.callbacks.OnWhitelistUpdate()
     end
+    selectListByName(desiredListName)
 end
 
-local function updateDisplay(listName)
-    if ListManager.canvas == nil or ListManager.widgets.member_scroll_wnd == nil or listName == nil or listName == "" then
+local function removeEntryFromList(listName, itemIndex, itemName)
+    local targetListName = type(listName) == "string" and listName ~= "" and listName or getSelectedListName()
+    local targetList = getListByName(targetListName)
+    if type(targetList) ~= "table" then
+        return false
+    end
+
+    local expectedName = tostring(itemName or "")
+    local numericIndex = tonumber(itemIndex)
+    if numericIndex ~= nil and targetList[numericIndex] == expectedName then
+        table.remove(targetList, numericIndex)
+        return true
+    end
+
+    for index, value in ipairs(targetList) do
+        if tostring(value or "") == expectedName then
+            table.remove(targetList, index)
+            return true
+        end
+    end
+
+    return false
+end
+
+updateDisplay = function(listName)
+    if ListManager.canvas == nil or ListManager.widgets.member_scroll_wnd == nil then
         return
     end
+    if listName == nil or listName == "" then
+        clearSelectionDisplay()
+        return
+    end
+    ListManager.selected_list_name = listName
     local blacklistWarning = ListManager.widgets.blacklist_warning
     if blacklistWarning ~= nil and blacklistWarning.Show ~= nil then
         blacklistWarning:Show(isProtectedList(listName))
@@ -278,7 +501,7 @@ local function updateDisplay(listName)
 
     local memberScroll = ListManager.widgets.member_scroll_wnd
     local oldScroll = memberScroll.scroll.vs:GetValue()
-    memberScroll.scroll.vs:SetValue(0)
+    memberScroll.scroll.vs:SetValue(0, false)
     memberScroll.content:ChangeChildAnchorByScrollValue("vert", 0)
 
     clearScrollChildren()
@@ -288,26 +511,38 @@ local function updateDisplay(listName)
     local content = memberScroll.content
     local itemHeight = 45
     for i, name in ipairs(currentList) do
+        local itemIndex = i
+        local itemName = tostring(name or "")
         local yOffset = (i - 1) * itemHeight
         local uniqueId = tostring(i) .. "_" .. tostring(ListManager.refresh_counter)
 
-        local label = Utils.CreateLabel(content, "nrtLmLabel_" .. uniqueId, name, 16, ALIGN.LEFT, 1, 1, 1, 1)
-        label:SetExtent(360, 24)
-        label:AddAnchor("TOPLEFT", content, 12, yOffset + 12)
+        local row = createEmptyChild(content, "nrtLmRow_" .. uniqueId, 0, yOffset, 440, itemHeight - 2)
+        if row ~= nil then
+            table.insert(ListManager.scroll_children, row)
+        else
+            row = content
+        end
+
+        local label = Utils.CreateLabel(row, "nrtLmLabel_" .. uniqueId, itemName, 16, ALIGN.LEFT, 1, 1, 1, 1)
+        label:SetExtent(336, 24)
+        label:AddAnchor("TOPLEFT", row, 12, 10)
         label:Show(true)
         table.insert(ListManager.scroll_children, label)
 
-        local deleteButton = Utils.CreateButton(content, "nrtLmDelete_" .. uniqueId, "Remove", 72, 24)
-        deleteButton:AddAnchor("TOPRIGHT", content, -16, yOffset + 10)
+        local deleteButton = Utils.CreateButton(row, "nrtLmDelete_" .. uniqueId, "Remove", 72, 24)
+        deleteButton:AddAnchor("TOPRIGHT", row, -16, 8)
         deleteButton:Show(true)
         table.insert(ListManager.scroll_children, deleteButton)
         deleteButton:SetHandler("OnClick", function()
-            table.remove(currentList, i)
+            if not removeEntryFromList(listName, itemIndex, itemName) then
+                api.Log:Info("[Nuzi Raidtools] Could not remove list entry: " .. tostring(itemName))
+                return
+            end
             if ListManager.callbacks ~= nil and ListManager.callbacks.SaveSettings ~= nil then
                 ListManager.callbacks.SaveSettings()
             end
             notifyListChanged(listName)
-            updateDisplay(listName)
+            refreshManagerDropdown(listName)
         end)
     end
 
@@ -317,7 +552,7 @@ local function updateDisplay(listName)
     if oldScroll > maxValue then
         oldScroll = maxValue
     end
-    memberScroll.scroll.vs:SetValue(oldScroll)
+    memberScroll.scroll.vs:SetValue(oldScroll, false)
     memberScroll.content:ChangeChildAnchorByScrollValue("vert", oldScroll)
 end
 
@@ -325,21 +560,51 @@ function ListManager.Init(settings, callbacks)
     ListManager.settings = settings
     ListManager.callbacks = callbacks or {}
     if ListManager.canvas ~= nil then
-        refreshManagerDropdown()
+        refreshManagerDropdown(ListManager.selected_list_name)
         return
     end
 
     local canvas = api.Interface:CreateEmptyWindow("nuziRaidtoolsListManager")
     canvas:AddAnchor("CENTER", "UIParent", 0, 0)
-    canvas:SetExtent(820, 430)
+    canvas:SetExtent(832, 446)
+    if canvas.EnableHidingIsRemove ~= nil then
+        canvas:EnableHidingIsRemove(false)
+    end
+    if canvas.SetCloseOnEscape ~= nil then
+        canvas:SetCloseOnEscape(false)
+    end
     canvas:Show(false)
     ListManager.canvas = canvas
 
-    canvas.bg = canvas:CreateNinePartDrawable(TEXTURE_PATH.HUD, "background")
-    canvas.bg:SetTextureInfo("bg_quest")
-    canvas.bg:SetColor(0, 0, 0, 0.9)
-    canvas.bg:AddAnchor("TOPLEFT", canvas, 0, 0)
-    canvas.bg:AddAnchor("BOTTOMRIGHT", canvas, 0, 0)
+    local shell = createEmptyChild(canvas, "nuziRaidtoolsListManagerShell", 0, 0, 832, 446)
+    if shell ~= nil then
+        shell:AddAnchor("BOTTOMRIGHT", canvas, 0, 0)
+        applyPanelBackground(shell, 0.94)
+        applyPanelAccent(shell, 44, 0.08)
+        applyPanelDivider(shell, 44, 12, -12, 0.12)
+    end
+
+    local header = createEmptyChild(canvas, "nuziRaidtoolsListManagerHeader", 0, 0, 832, 24)
+    if header ~= nil then
+        header:AddAnchor("TOPRIGHT", canvas, 0, 0)
+        applyPanelBackground(header, 0.98)
+        applyPanelAccent(header, 24, 0.10)
+        applyPanelDivider(header, 24, 10, -10, 0.14)
+    end
+
+    local listsPanel = createEmptyChild(canvas, "nuziRaidtoolsListManagerListsPanel", 12, 36, 288, 398)
+    if listsPanel ~= nil then
+        applyPanelBackground(listsPanel, 0.86)
+        applyPanelAccent(listsPanel, 42, 0.12)
+        applyPanelDivider(listsPanel, 48, 14, -14, 0.16)
+    end
+
+    local entriesPanel = createEmptyChild(canvas, "nuziRaidtoolsListManagerEntriesPanel", 312, 36, 508, 398)
+    if entriesPanel ~= nil then
+        applyPanelBackground(entriesPanel, 0.86)
+        applyPanelAccent(entriesPanel, 42, 0.12)
+        applyPanelDivider(entriesPanel, 48, 14, -14, 0.16)
+    end
 
     function canvas:OnDragStart()
         if api.Input ~= nil and api.Input.IsShiftKeyDown ~= nil and api.Input:IsShiftKeyDown() then
@@ -358,17 +623,17 @@ function ListManager.Init(settings, callbacks)
     canvas:SetHandler("OnDragStop", canvas.OnDragStop)
     canvas:EnableDrag(true)
 
-    local closeButton = Utils.CreateButton(canvas, "nuziRaidtoolsListManagerClose", "X", 28, 24)
-    closeButton:AddAnchor("TOPRIGHT", canvas, -10, 5)
+    local closeButton = Utils.CreateButton(header or canvas, "nuziRaidtoolsListManagerClose", "X", 28, 22)
+    closeButton:AddAnchor("TOPRIGHT", header or canvas, -10, 1)
     closeButton:SetHandler("OnClick", function()
         canvas:Show(false)
     end)
 
-    local title = Utils.CreateLabel(canvas, "nuziRaidtoolsListManagerTitle", "List Manager", 16, ALIGN.LEFT, 1, 1, 1, 1)
-    title:AddAnchor("TOPLEFT", canvas, 20, 12)
+    createThemedLabel(header or canvas, "nuziRaidtoolsListManagerTitle", "Raidtools List Manager", 15, 14, 3, 280, "title")
 
-    local manageHeader = Utils.CreateLabel(canvas, "nuziRaidtoolsManageHeader", "Manage Lists", 13, ALIGN.LEFT, 0.92, 0.82, 0.35, 1)
-    manageHeader:AddAnchor("TOPLEFT", canvas, 20, 42)
+    createThemedLabel(canvas, "nuziRaidtoolsListManagerHint", "Shift-drag this window to move it.", 11, 560, 12, 220, "hint")
+
+    createThemedLabel(canvas, "nuziRaidtoolsManageHeader", "Manage Lists", 14, 20, 48, 240, "heading")
 
     local listNameInput = Utils.CreateEditBox(canvas, "nuziRaidtoolsNewListName", "New List Name", 165, 30)
     listNameInput:AddAnchor("TOPLEFT", canvas, 20, 66)
@@ -376,8 +641,7 @@ function ListManager.Init(settings, callbacks)
     local createListButton = Utils.CreateButton(canvas, "nuziRaidtoolsCreateList", "Create", 90, 30)
     createListButton:AddAnchor("LEFT", listNameInput, "RIGHT", 8, 0)
 
-    local currentListHeader = Utils.CreateLabel(canvas, "nuziRaidtoolsCurrentListHeader", "Current List", 13, ALIGN.LEFT, 0.92, 0.82, 0.35, 1)
-    currentListHeader:AddAnchor("TOPLEFT", canvas, 20, 114)
+    createThemedLabel(canvas, "nuziRaidtoolsCurrentListHeader", "Current List", 12, 20, 114, 240, "text")
 
     local whitelistDropdown = Utils.CreateComboBox(canvas, nil, 263, 30)
     whitelistDropdown:AddAnchor("TOPLEFT", canvas, 20, 138)
@@ -386,45 +650,38 @@ function ListManager.Init(settings, callbacks)
     local deleteListButton = Utils.CreateButton(canvas, "nuziRaidtoolsDeleteList", "Delete List", 110, 30)
     deleteListButton:AddAnchor("TOPLEFT", canvas, 20, 176)
 
-    local listToggleLabel = Utils.CreateLabel(
+    local listToggleLabel = createThemedLabel(
         canvas,
         "nuziRaidtoolsListToggleLabel",
-        "Use this whitelist for auto-invite",
+        "Whitelist automation is disabled for this list",
         11,
-        ALIGN.LEFT,
-        0.78,
-        0.78,
-        0.78,
-        1
+        20,
+        218,
+        248,
+        "hint"
     )
-    listToggleLabel:SetExtent(190, 34)
-    listToggleLabel:AddAnchor("TOPLEFT", canvas, 20, 218)
     listToggleLabel:Show(false)
     ListManager.widgets.list_toggle_label = listToggleLabel
 
-    local listToggleButton = Utils.CreateButton(canvas, "nuziRaidtoolsListToggleButton", "Disabled", 110, 28)
+    local listToggleButton = Utils.CreateButton(canvas, "nuziRaidtoolsListToggleButton", "Enable List", 126, 28)
     listToggleButton:AddAnchor("TOPLEFT", canvas, 20, 252)
     listToggleButton:Show(false)
     ListManager.widgets.list_toggle_button = listToggleButton
 
-    local blacklistWarning = Utils.CreateLabel(
+    local blacklistWarning = createThemedLabel(
         canvas,
         "nuziRaidtoolsBlacklistWarn",
         "You are currently editing your blacklist",
         11,
-        ALIGN.LEFT,
-        1,
-        0.45,
-        0.3,
-        1
+        20,
+        288,
+        248,
+        "warning"
     )
-    blacklistWarning:SetExtent(263, 34)
-    blacklistWarning:AddAnchor("TOPLEFT", canvas, 20, 288)
     blacklistWarning:Show(false)
     ListManager.widgets.blacklist_warning = blacklistWarning
 
-    local entriesHeader = Utils.CreateLabel(canvas, "nuziRaidtoolsEntriesHeader", "Add Entries", 13, ALIGN.LEFT, 0.92, 0.82, 0.35, 1)
-    entriesHeader:AddAnchor("TOPLEFT", canvas, 320, 42)
+    createThemedLabel(canvas, "nuziRaidtoolsEntriesHeader", "Add Entries", 14, 320, 48, 220, "heading")
 
     local memberInput = Utils.CreateEditBox(canvas, "nuziRaidtoolsMemberInput", "Paste names here", 330, 30, 100000)
     memberInput:AddAnchor("TOPLEFT", canvas, 320, 66)
@@ -435,42 +692,38 @@ function ListManager.Init(settings, callbacks)
     local addRaidButton = Utils.CreateButton(canvas, "nuziRaidtoolsAddRaidMembers", "Add Current Raid", 140, 30)
     addRaidButton:AddAnchor("TOPLEFT", canvas, 320, 104)
 
-    local addRaidHint = Utils.CreateLabel(
+    local addRaidHint = createThemedLabel(
         canvas,
         "nuziRaidtoolsAddRaidHint",
         "Only adds nearby raid members.",
         11,
-        ALIGN.LEFT,
-        0.78,
-        0.78,
-        0.78,
-        1
+        470,
+        110,
+        300,
+        "hint"
     )
-    addRaidHint:SetExtent(300, 34)
-    addRaidHint:AddAnchor("LEFT", addRaidButton, "RIGHT", 10, 0)
 
-    local contentsHeader = Utils.CreateLabel(canvas, "nuziRaidtoolsContentsHeader", "List Contents", 13, ALIGN.LEFT, 0.92, 0.82, 0.35, 1)
-    contentsHeader:AddAnchor("TOPLEFT", canvas, 320, 148)
+    createThemedLabel(canvas, "nuziRaidtoolsContentsHeader", "List Contents", 12, 320, 148, 220, "text")
 
     local memberScroll = Utils.CreateScrollWindow(canvas, "nuziRaidtoolsMemberScroll", 0)
     memberScroll:Show(true)
     memberScroll:RemoveAllAnchors()
     memberScroll:AddAnchor("TOPLEFT", canvas, 320, 172)
-    memberScroll:SetExtent(470, 220)
+    memberScroll:SetExtent(482, 228)
     ListManager.widgets.member_scroll_wnd = memberScroll
 
     local scrollBg = memberScroll:CreateNinePartDrawable(TEXTURE_PATH.HUD, "background")
     scrollBg:SetTextureInfo("bg_quest")
-    scrollBg:SetColor(0, 0, 0, 0.5)
+    scrollBg:SetColor(0.05, 0.04, 0.03, 0.78)
     scrollBg:AddAnchor("TOPLEFT", memberScroll, 0, 0)
     scrollBg:AddAnchor("BOTTOMRIGHT", memberScroll, 0, 0)
 
     function whitelistDropdown:SelectedProc()
         local idx = whitelistDropdown:GetSelectedIndex()
         local names = whitelistDropdown.dropdownItem or {}
-        if idx > 0 and names[idx] ~= nil then
-            updateDisplay(names[idx])
-        end
+        local selected = idx > 0 and names[idx] or nil
+        ListManager.selected_list_name = selected
+        updateDisplay(selected)
     end
 
     listToggleButton:SetHandler("OnClick", function()
@@ -509,7 +762,7 @@ function ListManager.Init(settings, callbacks)
         if ListManager.callbacks ~= nil and ListManager.callbacks.SaveSettings ~= nil then
             ListManager.callbacks.SaveSettings()
         end
-        refreshManagerDropdown()
+        refreshManagerDropdown(name)
         listNameInput:SetText("")
         api.Log:Info("[Nuzi Raidtools] Created list: " .. name)
     end)
@@ -533,9 +786,7 @@ function ListManager.Init(settings, callbacks)
         if ListManager.callbacks ~= nil and ListManager.callbacks.SaveSettings ~= nil then
             ListManager.callbacks.SaveSettings()
         end
-        refreshManagerDropdown()
-        clearScrollChildren()
-        blacklistWarning:Show(false)
+        refreshManagerDropdown(selected)
         api.Log:Info("[Nuzi Raidtools] Deleted list: " .. selected)
     end)
 
@@ -612,7 +863,7 @@ function ListManager.Init(settings, callbacks)
         api.Log:Info("[Nuzi Raidtools] Added " .. tostring(addedCount) .. " current raid members to " .. tostring(selected) .. ".")
     end)
 
-    refreshManagerDropdown()
+    refreshManagerDropdown(ListManager.selected_list_name)
 end
 
 function ListManager.Toggle()
@@ -621,10 +872,7 @@ function ListManager.Toggle()
     end
     ListManager.canvas:Show(not ListManager.canvas:IsVisible())
     if ListManager.canvas:IsVisible() then
-        refreshManagerDropdown()
-        if ListManager.widgets.whitelist_dropdown ~= nil and ListManager.widgets.whitelist_dropdown.SelectedProc ~= nil then
-            ListManager.widgets.whitelist_dropdown:SelectedProc()
-        end
+        refreshManagerDropdown(ListManager.selected_list_name)
     end
 end
 
@@ -638,7 +886,7 @@ function ListManager.Free()
 end
 
 function ListManager.Refresh()
-    refreshManagerDropdown()
+    refreshManagerDropdown(ListManager.selected_list_name)
 end
 
 return ListManager
