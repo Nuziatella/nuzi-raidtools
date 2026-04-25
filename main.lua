@@ -40,7 +40,7 @@ local ListManager = modules.list_manager
 local addon = Shared ~= nil and Shared.ADDON or {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "1.0.2",
+    version = "2.0.0",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 

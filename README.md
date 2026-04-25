@@ -80,6 +80,4 @@ Less clutter, less squinting, fewer excuses.
 - The addon keeps local settings and list files separate so they survive addon updates more reliably.
 - If something looks wrong after a major update, reload once so the latest saved settings are re-read cleanly.
 
-## Version
-
-Current version: `1.0.0`
+2.0.0

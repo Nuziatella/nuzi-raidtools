@@ -41,7 +41,7 @@ Shared.logger = logger
 Shared.ADDON = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "1.0.2",
+    version = "2.0.0",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
