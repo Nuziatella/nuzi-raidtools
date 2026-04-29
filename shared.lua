@@ -41,7 +41,7 @@ Shared.logger = logger
 Shared.ADDON = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.0",
+    version = "2.0.1",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -84,6 +84,7 @@ Shared.DEFAULT_SETTINGS = {
     whitelist_auto_invite_on_cadence = false,
     give_lead_whitelist_enabled = true,
     always_visible = true,
+    floating_icon_size = 40,
     floating_button_x = 100,
     floating_button_y = 100,
     filter_selection = 1,
@@ -227,6 +228,13 @@ function Shared.NormalizeAutoInviteSettings(settings)
     settings.whitelist_auto_invite = settings.whitelist_auto_invite and true or false
     settings.whitelist_auto_invite_on_login = settings.whitelist_auto_invite_on_login and true or false
     settings.whitelist_auto_invite_on_cadence = settings.whitelist_auto_invite_on_cadence and true or false
+    local iconSize = math.floor((tonumber(settings.floating_icon_size) or 40) + 0.5)
+    if iconSize < 28 then
+        iconSize = 28
+    elseif iconSize > 72 then
+        iconSize = 72
+    end
+    settings.floating_icon_size = iconSize
 end
 
 function Shared.NormalizeNameList(value)
@@ -438,6 +446,7 @@ local function buildSettingsPayload(settings)
         whitelist_auto_invite_on_cadence = settings.whitelist_auto_invite_on_cadence and true or false,
         give_lead_whitelist_enabled = settings.give_lead_whitelist_enabled and true or false,
         always_visible = settings.always_visible and true or false,
+        floating_icon_size = tonumber(settings.floating_icon_size) or 40,
         floating_button_x = tonumber(settings.floating_button_x) or 100,
         floating_button_y = tonumber(settings.floating_button_y) or 100,
         filter_selection = tonumber(settings.filter_selection) or 1,

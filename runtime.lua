@@ -20,12 +20,51 @@ local function trimText(value)
     return Shared.TrimText(value)
 end
 
+local function normalizeUnitId(unitId)
+    local valueType = type(unitId)
+    if valueType == "string" then
+        local text = tostring(unitId):gsub("^%s+", ""):gsub("%s+$", "")
+        if text ~= "" and text ~= "0" then
+            return text
+        end
+    elseif valueType == "number" and unitId ~= 0 then
+        return tostring(unitId)
+    end
+    return nil
+end
+
 local function normalizeKey(value)
     return Shared.NormalizeKey(value)
 end
 
 local function tableHasEntries(value)
     return Shared.TableHasEntries(value)
+end
+
+local function readPlayerTeamIndex()
+    if api.Team == nil or api.Team.GetTeamPlayerIndex == nil then
+        return nil
+    end
+    local index = nil
+    pcall(function()
+        index = api.Team:GetTeamPlayerIndex()
+    end)
+    index = tonumber(index)
+    if index ~= nil and index > 0 then
+        return index
+    end
+    return nil
+end
+
+local function readPlayerTeamAuthority()
+    if api.Unit == nil or api.Unit.UnitTeamAuthority == nil then
+        return ""
+    end
+    local authority = ""
+    pcall(function()
+        authority = api.Unit:UnitTeamAuthority("player") or ""
+    end)
+    return normalizeKey(authority)
 end
 
 function Runtime.GetCurrentPlayerName()
@@ -62,6 +101,9 @@ end
 
 function Runtime.InviteNamesToRaid(names, options)
     if type(names) ~= "table" then
+        return 0
+    end
+    if not Runtime.CanSendRaidInvites() then
         return 0
     end
 
@@ -147,6 +189,7 @@ function Runtime.GetCurrentCharacterKey()
         pcall(function()
             unitId = api.Unit:GetUnitId("player")
         end)
+        unitId = normalizeUnitId(unitId)
     end
     if name == "" then
         for _, methodName in ipairs({ "UnitName", "GetUnitName" }) do
@@ -307,6 +350,24 @@ function Runtime.CanInviteSpeaker(formattedSpeaker)
     end
     State.invite_cooldown_by_name[key] = nowMs
     return true
+end
+
+function Runtime.IsRaidGeneral()
+    return readPlayerTeamAuthority() == "leader"
+end
+
+function Runtime.CanSendRaidInvites()
+    if api.Team == nil or api.Team.InviteToTeam == nil then
+        return false
+    end
+    local authority = readPlayerTeamAuthority()
+    if authority ~= "" then
+        return authority == "leader"
+    end
+    if readPlayerTeamIndex() == nil then
+        return true
+    end
+    return false
 end
 
 local function extractWhitelistLoginInviteTarget(speakerName, message)
@@ -487,7 +548,10 @@ function Runtime.HandleLeadSniffing(channel, speakerName, message)
     local playerName = ""
     if api.Unit ~= nil and api.Unit.GetUnitNameById ~= nil and api.Unit.GetUnitId ~= nil then
         pcall(function()
-            playerName = api.Unit:GetUnitNameById(api.Unit:GetUnitId("player")) or ""
+            local playerId = normalizeUnitId(api.Unit:GetUnitId("player"))
+            if playerId ~= nil then
+                playerName = api.Unit:GetUnitNameById(playerId) or ""
+            end
         end)
     end
     if formattedSpeaker == playerName then
@@ -572,11 +636,11 @@ function Runtime.HandleRecruitMessage(channelId, speakerName, message)
         return
     end
 
-    if Runtime.CanInviteSpeaker(formattedSpeaker) then
-        pcall(function()
-            api.Team:InviteToTeam(formattedSpeaker, false)
-        end)
-    end
+    Runtime.InviteNamesToRaid({ formattedSpeaker }, {
+        skip_player = true,
+        skip_in_raid = true,
+        respect_cooldown = true
+    })
 end
 
 function Runtime.OnRoleChanged(role)

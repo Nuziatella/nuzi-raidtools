@@ -12,6 +12,10 @@ local Runtime = nil
 local State = nil
 local FloatingButtonPositions = nil
 
+local FLOATING_ICON_MIN_SIZE = 28
+local FLOATING_ICON_MAX_SIZE = 72
+local FLOATING_ICON_ASPECT = 1.5
+
 function RaidManagerUi.Init(shared, utils, listManager, runtime)
     Shared = shared
     Utils = utils
@@ -45,6 +49,19 @@ local function trimText(value)
     return tostring(value or ""):gsub("^%s*(.-)%s*$", "%1")
 end
 
+local function normalizeUnitId(unitId)
+    local valueType = type(unitId)
+    if valueType == "string" then
+        local text = trimText(unitId)
+        if text ~= "" and text ~= "0" then
+            return text
+        end
+    elseif valueType == "number" and unitId ~= 0 then
+        return tostring(unitId)
+    end
+    return nil
+end
+
 local function normalizeKey(value)
     local text = trimText(value)
     if text == "" then
@@ -58,6 +75,24 @@ local function safeSetText(widget, text)
         return
     end
     widget:SetText(tostring(text or ""))
+end
+
+local function safeSetExtent(widget, width, height)
+    if widget == nil or widget.SetExtent == nil then
+        return
+    end
+    widget:SetExtent(width, height)
+end
+
+local function safeSetTexture(drawable, path)
+    if drawable == nil or drawable.SetTexture == nil or type(path) ~= "string" or path == "" then
+        return
+    end
+    if drawable.__nuzi_texture == path then
+        return
+    end
+    drawable.__nuzi_texture = path
+    drawable:SetTexture(path)
 end
 
 local function safeShow(widget, visible)
@@ -104,6 +139,96 @@ local function createEmptyChild(parent, id)
         widget:Show(true)
     end
     return widget
+end
+
+local function assetPath(relativePath)
+    local baseDir = type(api) == "table" and type(api.baseDir) == "string" and api.baseDir or ""
+    baseDir = string.gsub(baseDir, "\\", "/")
+    if baseDir ~= "" then
+        return string.gsub(baseDir .. "/" .. tostring(relativePath or ""), "/+", "/")
+    end
+    return tostring(relativePath or "")
+end
+
+local function createImageDrawable(widget, id, path, layer, width, height)
+    if widget == nil then
+        return nil
+    end
+    local drawable = nil
+    if widget.CreateImageDrawable ~= nil then
+        drawable = widget:CreateImageDrawable(id, layer or "artwork")
+    elseif widget.CreateDrawable ~= nil then
+        drawable = widget:CreateDrawable(id, layer or "artwork")
+    end
+    if drawable == nil then
+        return nil
+    end
+    safeSetTexture(drawable, path)
+    if drawable.Clickable ~= nil then
+        drawable:Clickable(false)
+    end
+    if drawable.EnablePick ~= nil then
+        drawable:EnablePick(false)
+    end
+    if drawable.AddAnchor ~= nil then
+        drawable:AddAnchor("TOPLEFT", widget, 0, 0)
+    end
+    safeSetExtent(drawable, width, height)
+    safeShow(drawable, true)
+    return drawable
+end
+
+local function clampNumber(value, minValue, maxValue, fallback)
+    local number = tonumber(value)
+    if number == nil then
+        return fallback
+    end
+    if number < minValue then
+        return minValue
+    elseif number > maxValue then
+        return maxValue
+    end
+    return number
+end
+
+local function getFloatingIconSize(settings)
+    return math.floor(clampNumber(
+        settings ~= nil and settings.floating_icon_size or nil,
+        FLOATING_ICON_MIN_SIZE,
+        FLOATING_ICON_MAX_SIZE,
+        Shared.DEFAULT_SETTINGS.floating_icon_size or 40
+    ) + 0.5)
+end
+
+local function createSlider(parent, id, width, minValue, maxValue)
+    local slider = nil
+    if Core ~= nil and Core.UI ~= nil and Core.UI.CreateSlider ~= nil then
+        slider = Core.UI.CreateSlider(id, parent)
+    end
+    if slider == nil and api._Library ~= nil and api._Library.UI ~= nil and api._Library.UI.CreateSlider ~= nil then
+        slider = api._Library.UI.CreateSlider(id, parent)
+    end
+    if slider == nil then
+        return nil
+    end
+    safeSetExtent(slider, width, 26)
+    if slider.SetMinMaxValues ~= nil then
+        slider:SetMinMaxValues(minValue, maxValue)
+    end
+    if slider.SetStep ~= nil then
+        slider:SetStep(1)
+    elseif slider.SetValueStep ~= nil then
+        slider:SetValueStep(1)
+    end
+    safeShow(slider, true)
+    return slider
+end
+
+local function safeSetSliderValue(slider, value)
+    if slider == nil or slider.SetValue == nil then
+        return
+    end
+    slider:SetValue(value, false)
 end
 
 local function applyPanelBackground(widget, alpha)
@@ -351,6 +476,30 @@ local function createAttachedSettingsWindow()
     return window
 end
 
+local function createFloatingButtonWindow(width, height)
+    local window = nil
+    if api.Interface ~= nil and api.Interface.CreateEmptyWindow ~= nil then
+        window = api.Interface:CreateEmptyWindow("nuziRaidtoolsFloatingRecruit", "UIParent")
+    elseif api.Interface ~= nil and api.Interface.CreateWidget ~= nil then
+        window = api.Interface:CreateWidget("button", "nuziRaidtoolsFloatingRecruit", "UIParent")
+    end
+    if window == nil then
+        return nil
+    end
+    safeSetExtent(window, width, height)
+    safeSetText(window, "")
+    if window.EnableHidingIsRemove ~= nil then
+        window:EnableHidingIsRemove(false)
+    end
+    if window.SetCloseOnEscape ~= nil then
+        window:SetCloseOnEscape(false)
+    end
+    if window.SetUILayer ~= nil then
+        window:SetUILayer("game")
+    end
+    return window
+end
+
 local function isWidgetLike(value)
     return type(value) == "table"
         and (
@@ -566,8 +715,9 @@ local function getRaidUnitContext(unitToken)
         pcall(function()
             unitId = api.Unit:GetUnitId(unitToken)
         end)
+        unitId = normalizeUnitId(unitId)
     end
-    if unitId ~= nil and unitId ~= "" and api.Unit ~= nil and api.Unit.GetUnitInfoById ~= nil then
+    if unitId ~= nil and api.Unit ~= nil and api.Unit.GetUnitInfoById ~= nil then
         pcall(function()
             infoById = api.Unit:GetUnitInfoById(unitId)
         end)
@@ -977,7 +1127,8 @@ local function getRaidUnitDisplayName(unitToken, unitId, info, infoById, memberF
         end
     end
 
-    if api.Unit ~= nil and api.Unit.GetUnitNameById ~= nil and unitId ~= nil and unitId ~= "" then
+    unitId = normalizeUnitId(unitId)
+    if api.Unit ~= nil and api.Unit.GetUnitNameById ~= nil and unitId ~= nil then
         local ok, value = pcall(function()
             return api.Unit:GetUnitNameById(unitId)
         end)
@@ -1252,6 +1403,51 @@ function RaidManagerUi.PatchRaidManagerMembers(raidManager)
     end
 end
 
+local function getFloatingIconPath(isRecruiting)
+    if isRecruiting then
+        return assetPath("nuzi-raidtools/auto_off.png")
+    end
+    return assetPath("nuzi-raidtools/auto_on.png")
+end
+
+local function getFloatingIconExtent(settings)
+    local height = getFloatingIconSize(settings)
+    return math.floor((height * FLOATING_ICON_ASPECT) + 0.5), height
+end
+
+local function applyFloatingButtonLayout()
+    if State.floating_button == nil then
+        return
+    end
+    local width, height = getFloatingIconExtent(getSettings())
+    safeSetExtent(State.floating_button, width, height)
+    safeSetText(State.floating_button, "")
+    if State.floating_button_icon ~= nil then
+        safeSetExtent(State.floating_button_icon, width, height)
+    end
+end
+
+local function syncFloatingButtonIcon()
+    if State.floating_button == nil then
+        return
+    end
+    local settings = getSettings()
+    local width, height = getFloatingIconExtent(settings)
+    if State.floating_button_icon == nil then
+        State.floating_button_icon = createImageDrawable(
+            State.floating_button,
+            "nuziRaidtoolsFloatingRecruitIcon",
+            getFloatingIconPath(settings.is_recruiting),
+            "artwork",
+            width,
+            height
+        )
+    end
+    safeSetTexture(State.floating_button_icon, getFloatingIconPath(settings.is_recruiting))
+    safeSetExtent(State.floating_button_icon, width, height)
+    safeShow(State.floating_button_icon, true)
+end
+
 function RaidManagerUi.UpdateFloatingButtonVisibility()
     if State.floating_button == nil then
         return
@@ -1265,13 +1461,21 @@ function RaidManagerUi.UpdateFloatingButtonVisibility()
 end
 
 function RaidManagerUi.SyncRecruitWidgets()
-    local isRecruiting = getSettings().is_recruiting and true or false
+    local settings = getSettings()
+    local isRecruiting = settings.is_recruiting and true or false
     local text = Runtime.GetRecruitButtonText()
     if State.widgets.recruit_button ~= nil then
         State.widgets.recruit_button:SetText(text)
     end
+    if State.widgets.floating_icon_size_value ~= nil then
+        safeSetText(State.widgets.floating_icon_size_value, tostring(getFloatingIconSize(settings)))
+    end
+    if State.widgets.floating_icon_size_slider ~= nil then
+        safeSetSliderValue(State.widgets.floating_icon_size_slider, getFloatingIconSize(settings))
+    end
     if State.floating_button ~= nil then
-        State.floating_button:SetText(text)
+        applyFloatingButtonLayout()
+        syncFloatingButtonIcon()
     end
     safeEnable(State.widgets.recruit_textfield, not isRecruiting)
     RaidManagerUi.UpdateFloatingButtonVisibility()
@@ -1558,7 +1762,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         local alwaysVisibleCheckbox = createCheckboxRow(
             autoInviteCard,
             "nuziRaidtoolsAlwaysVisible",
-            "Always show the floating recruit button",
+            "Always show the floating auto-invite icon",
             14,
             210,
             286
@@ -1873,6 +2077,58 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
     end
     sectionY = sectionY + 292
 
+    local iconCard = createSectionCard(
+        content,
+        "nuziRaidtoolsFloatingIconCard",
+        "Floating Icon",
+        "Size the auto-invite launcher.",
+        sectionY,
+        cardWidth,
+        128
+    )
+    if iconCard ~= nil then
+        local iconSizeLabel = createThemedLabel(iconCard, "nuziRaidtoolsFloatingIconSizeLabel", "Icon Size", 12, 120, 18, "text")
+        if iconSizeLabel ~= nil then
+            iconSizeLabel:AddAnchor("TOPLEFT", iconCard, 14, 70)
+        end
+
+        local iconSizeValue = createThemedLabel(
+            iconCard,
+            "nuziRaidtoolsFloatingIconSizeValue",
+            tostring(getFloatingIconSize(settings)),
+            12,
+            42,
+            18,
+            "hint"
+        )
+        if iconSizeValue ~= nil then
+            iconSizeValue:AddAnchor("TOPRIGHT", iconCard, -14, 70)
+        end
+        State.widgets.floating_icon_size_value = iconSizeValue
+
+        local iconSizeSlider = createSlider(
+            iconCard,
+            "nuziRaidtoolsFloatingIconSizeSlider",
+            cardWidth - 122,
+            FLOATING_ICON_MIN_SIZE,
+            FLOATING_ICON_MAX_SIZE
+        )
+        if iconSizeSlider ~= nil then
+            iconSizeSlider:AddAnchor("TOPLEFT", iconCard, 88, 66)
+            safeSetSliderValue(iconSizeSlider, getFloatingIconSize(settings))
+            iconSizeSlider:SetHandler("OnSliderChanged", function(_, raw)
+                local size = math.floor(clampNumber(raw, FLOATING_ICON_MIN_SIZE, FLOATING_ICON_MAX_SIZE, 40) + 0.5)
+                settings.floating_icon_size = size
+                safeSetText(State.widgets.floating_icon_size_value, tostring(size))
+                Shared.SaveSettings()
+                applyFloatingButtonLayout()
+                syncFloatingButtonIcon()
+            end)
+            State.widgets.floating_icon_size_slider = iconSizeSlider
+        end
+    end
+    sectionY = sectionY + 140
+
     scrollFrame:ResetScroll(sectionY + 8)
 end
 
@@ -1897,7 +2153,11 @@ function RaidManagerUi.CreateFloatingButton()
     if State.floating_button ~= nil then
         return
     end
-    local button = Utils.CreateButton("UIParent", "nuziRaidtoolsFloatingRecruit", Runtime.GetRecruitButtonText(), 140, 30)
+    local width, height = getFloatingIconExtent(getSettings())
+    local button = createFloatingButtonWindow(width, height)
+    if button == nil then
+        return
+    end
     FloatingButtonPositions:ApplyAndBind(button, nil, "floating_button", {
         anchor = "TOPLEFT",
         relative_to = "UIParent",
@@ -1910,6 +2170,7 @@ function RaidManagerUi.CreateFloatingButton()
         end
     end)
     State.floating_button = button
+    syncFloatingButtonIcon()
     RaidManagerUi.SyncRecruitWidgets()
 end
 
@@ -1988,6 +2249,7 @@ function RaidManagerUi.Unload()
     if State.floating_button ~= nil then
         Utils.SafeFree(State.floating_button)
         State.floating_button = nil
+        State.floating_button_icon = nil
     end
 end
 

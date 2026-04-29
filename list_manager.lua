@@ -30,12 +30,29 @@ local THEME = {
 }
 local updateDisplay
 
+local function trimText(value)
+    return tostring(value or ""):gsub("^%s*(.-)%s*$", "%1")
+end
+
 local function normalizeKey(value)
-    local text = tostring(value or ""):gsub("^%s*(.-)%s*$", "%1")
+    local text = trimText(value)
     if text == "" then
         return ""
     end
     return string.lower(text)
+end
+
+local function normalizeUnitId(unitId)
+    local valueType = type(unitId)
+    if valueType == "string" then
+        local text = trimText(unitId)
+        if text ~= "" and text ~= "0" then
+            return text
+        end
+    elseif valueType == "number" and unitId ~= 0 then
+        return tostring(unitId)
+    end
+    return nil
 end
 
 local function safeShow(widget, visible)
@@ -324,7 +341,8 @@ local function collectCurrentRaidMemberNames()
             pcall(function()
                 unitId = api.Unit:GetUnitId(unitToken)
             end)
-            if unitId ~= nil and unitId ~= "" then
+            unitId = normalizeUnitId(unitId)
+            if unitId ~= nil then
                 if api.Unit.GetUnitInfoById ~= nil then
                     local infoById = nil
                     pcall(function()
