@@ -41,7 +41,7 @@ Shared.logger = logger
 Shared.ADDON = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.1",
+    version = "2.0.2",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -59,8 +59,12 @@ Shared.CONSTANTS = {
     GIVE_LEAD_WHITELIST_PATH = "nuzi-raidtools/.data/give_lead_whitelist.txt",
     LEGACY_GIVE_LEAD_WHITELIST_PATH = "nuzi-raidtools/give_lead_whitelist.txt",
     WHITELIST_AUTO_INVITE_CADENCE_MS = 60000,
+    WHITELIST_LOGIN_INVITE_DELAY_MS = 30000,
+    LOGIN_INVITE_QUEUE_INTERVAL_MS = 1000,
+    EXPEDITION_SYNC_INTERVAL_MS = 120000,
     RAID_INFO_REFRESH_INTERVAL_MS = 500,
     DEFAULT_AUTO_ROLE_SELECTION = 4,
+    DEFAULT_AUTOMATION_WHITELIST = "Guild Members",
     ATTACHED_SETTINGS_WIDTH = 392,
     ATTACHED_SETTINGS_HEIGHT = 708,
 }
@@ -82,6 +86,10 @@ Shared.DEFAULT_SETTINGS = {
     whitelist_auto_invite = false,
     whitelist_auto_invite_on_login = false,
     whitelist_auto_invite_on_cadence = false,
+    guild_auto_learn = false,
+    expedition_sync_enabled = false,
+    expedition_sync_name = "macro",
+    remote_auto_invite_controls = false,
     give_lead_whitelist_enabled = true,
     always_visible = true,
     floating_icon_size = 40,
@@ -140,11 +148,13 @@ Shared.SETTINGS_WINDOW_THEME = {
 Shared.state = {
     settings = nil,
     events = nil,
+    private_events = nil,
     current_character_key = nil,
     blacklist_lookup = {},
     enabled_whitelist_lookup = {},
     give_lead_whitelist_lookup = {},
     invite_cooldown_by_name = {},
+    login_invite_queue = {},
     recruit_message = "",
     raid_manager = nil,
     raid_manager_original_width = nil,
@@ -160,6 +170,14 @@ Shared.state = {
     auto_invite_cadence_ticker = Scheduler.CreateTicker({
         interval_ms = Shared.CONSTANTS.WHITELIST_AUTO_INVITE_CADENCE_MS,
         max_elapsed_ms = Shared.CONSTANTS.WHITELIST_AUTO_INVITE_CADENCE_MS * 2
+    }),
+    login_invite_queue_ticker = Scheduler.CreateTicker({
+        interval_ms = Shared.CONSTANTS.LOGIN_INVITE_QUEUE_INTERVAL_MS,
+        max_elapsed_ms = Shared.CONSTANTS.LOGIN_INVITE_QUEUE_INTERVAL_MS * 3
+    }),
+    expedition_sync_ticker = Scheduler.CreateTicker({
+        interval_ms = Shared.CONSTANTS.EXPEDITION_SYNC_INTERVAL_MS,
+        max_elapsed_ms = Shared.CONSTANTS.EXPEDITION_SYNC_INTERVAL_MS * 2
     })
 }
 
@@ -228,11 +246,18 @@ function Shared.NormalizeAutoInviteSettings(settings)
     settings.whitelist_auto_invite = settings.whitelist_auto_invite and true or false
     settings.whitelist_auto_invite_on_login = settings.whitelist_auto_invite_on_login and true or false
     settings.whitelist_auto_invite_on_cadence = settings.whitelist_auto_invite_on_cadence and true or false
+    settings.guild_auto_learn = settings.guild_auto_learn and true or false
+    settings.expedition_sync_enabled = settings.expedition_sync_enabled and true or false
+    settings.remote_auto_invite_controls = settings.remote_auto_invite_controls and true or false
+    settings.expedition_sync_name = Shared.TrimText(settings.expedition_sync_name or "macro")
+    if settings.expedition_sync_name == "" then
+        settings.expedition_sync_name = "macro"
+    end
     local iconSize = math.floor((tonumber(settings.floating_icon_size) or 40) + 0.5)
-    if iconSize < 28 then
-        iconSize = 28
-    elseif iconSize > 72 then
-        iconSize = 72
+    if iconSize < 32 then
+        iconSize = 32
+    elseif iconSize > 96 then
+        iconSize = 96
     end
     settings.floating_icon_size = iconSize
 end
@@ -444,6 +469,10 @@ local function buildSettingsPayload(settings)
         whitelist_auto_invite = settings.whitelist_auto_invite and true or false,
         whitelist_auto_invite_on_login = settings.whitelist_auto_invite_on_login and true or false,
         whitelist_auto_invite_on_cadence = settings.whitelist_auto_invite_on_cadence and true or false,
+        guild_auto_learn = settings.guild_auto_learn and true or false,
+        expedition_sync_enabled = settings.expedition_sync_enabled and true or false,
+        expedition_sync_name = Shared.TrimText(settings.expedition_sync_name or "macro"),
+        remote_auto_invite_controls = settings.remote_auto_invite_controls and true or false,
         give_lead_whitelist_enabled = settings.give_lead_whitelist_enabled and true or false,
         always_visible = settings.always_visible and true or false,
         floating_icon_size = tonumber(settings.floating_icon_size) or 40,

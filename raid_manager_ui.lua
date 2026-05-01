@@ -12,8 +12,8 @@ local Runtime = nil
 local State = nil
 local FloatingButtonPositions = nil
 
-local FLOATING_ICON_MIN_SIZE = 28
-local FLOATING_ICON_MAX_SIZE = 72
+local FLOATING_ICON_MIN_SIZE = 32
+local FLOATING_ICON_MAX_SIZE = 96
 local FLOATING_ICON_ASPECT = 1.5
 
 function RaidManagerUi.Init(shared, utils, listManager, runtime)
@@ -545,7 +545,7 @@ local function buildAllowedMemberWidgetLookup(memberFrame)
         end
     end
     addAllowed(memberFrame.offlineLabel, 3)
-    addAllowed(memberFrame.eventWindow, 3)
+    addAllowed(memberFrame.eventWindow, 0)
     addAllowed(memberFrame.__nuzi_name_label, 3)
     addAllowed(memberFrame.__nuzi_class_label, 3)
     addAllowed(memberFrame.__nuzi_gs_label, 3)
@@ -567,7 +567,7 @@ local function suppressStockMemberWidgetTree(widget, allowed, seen, depth)
         suppressStockMemberWidget(widget)
     end
 
-    if depth <= 0 or allowed[widget] then
+    if depth <= 0 then
         return
     end
 
@@ -1023,9 +1023,9 @@ local function layoutStockMemberLabels(memberFrame)
         rowWidth = tonumber(memberFrame:GetWidth()) or rowWidth
     end
     rowWidth = math.max(140, rowWidth)
-    local gsWidth = 54
-    local classWidth = math.max(40, math.min(64, math.floor(rowWidth * 0.24)))
-    local nameWidth = math.max(72, rowWidth - gsWidth - classWidth - 24)
+    local gsWidth = 42
+    local classWidth = math.max(36, math.min(48, math.floor(rowWidth * 0.22)))
+    local nameWidth = math.max(48, rowWidth - gsWidth - classWidth - 22)
     local nameLabel = type(memberFrame.__nuzi_name_label) == "table" and memberFrame.__nuzi_name_label or nil
     local gsLabel = type(memberFrame.__nuzi_gs_label) == "table" and memberFrame.__nuzi_gs_label or nil
     local classTextLabel = type(memberFrame.__nuzi_class_label) == "table" and memberFrame.__nuzi_class_label or nil
@@ -1040,14 +1040,14 @@ local function layoutStockMemberLabels(memberFrame)
     end
 
     if gsLabel ~= nil then
-        configureStockLabel(gsLabel, gsWidth, ALIGN.RIGHT, { 0.95, 0.84, 0.46, 1 }, 12, 18)
+        configureStockLabel(gsLabel, gsWidth, ALIGN.RIGHT, { 0.95, 0.84, 0.46, 1 }, 11, 18)
         safeRemoveAllAnchors(gsLabel)
         safeAddAnchor(gsLabel, "TOPRIGHT", memberFrame, nil, -4, 0)
         safeShow(gsLabel, true)
     end
 
     if classTextLabel ~= nil then
-        configureStockLabel(classTextLabel, classWidth, ALIGN.CENTER, classColor, 12, 18)
+        configureStockLabel(classTextLabel, classWidth, ALIGN.CENTER, classColor, 11, 18)
         safeRemoveAllAnchors(classTextLabel)
         if gsLabel ~= nil then
             safeAddAnchor(classTextLabel, "RIGHT", gsLabel, "LEFT", -6, 0)
@@ -1072,9 +1072,11 @@ local function ensureStockMemberOverlayLabel(memberFrame, storageKey, prefix)
     end
     local label = memberFrame[storageKey]
     if type(label) ~= "table" and memberFrame.CreateChildWidget ~= nil then
+        local party = memberFrame.__nuzi_raidtools_party or memberFrame.party or 0
+        local slot = memberFrame.__nuzi_raidtools_slot or memberFrame.memberIndex or memberFrame.slot or 0
         label = memberFrame:CreateChildWidget(
             "label",
-            prefix .. tostring(memberFrame.party or 0) .. "_" .. tostring(memberFrame.memberIndex or memberFrame.slot or 0),
+            prefix .. tostring(party) .. "_" .. tostring(slot),
             0,
             true
         )
@@ -1095,16 +1097,7 @@ local function ensureStockMemberNameLabel(memberFrame)
     return ensureStockMemberOverlayLabel(memberFrame, "__nuzi_name_label", "nuziRaidtoolsNameLabel")
 end
 
-local function getRaidUnitDisplayName(unitToken, unitId, info, infoById, memberFrame)
-    local displayName = trimText(
-        (type(info) == "table" and (info.name or info.unitName or info.family_name))
-        or (type(infoById) == "table" and (infoById.name or infoById.unitName or infoById.family_name))
-        or ""
-    )
-    if displayName ~= "" then
-        return displayName
-    end
-
+local function getRaidUnitDisplayName(unitToken, unitId, info, infoById)
     if api.Unit ~= nil and unitToken ~= nil and unitToken ~= "" then
         for _, methodName in ipairs({ "UnitName", "GetUnitName" }) do
             if type(api.Unit[methodName]) == "function" then
@@ -1138,46 +1131,52 @@ local function getRaidUnitDisplayName(unitToken, unitId, info, infoById, memberF
         end
     end
 
-    if type(memberFrame) == "table" and type(memberFrame.name) == "table" and memberFrame.name.GetText ~= nil then
-        local ok, value = pcall(function()
-            return memberFrame.name:GetText()
-        end)
-        value = trimText(value)
-        if ok and value ~= "" then
-            return value
-        end
+    local displayName = trimText(
+        (type(info) == "table" and (info.name or info.unitName or info.family_name))
+        or (type(infoById) == "table" and (infoById.name or infoById.unitName or infoById.family_name))
+        or ""
+    )
+    if displayName ~= "" then
+        return displayName
     end
 
     return ""
+end
+
+local function clearStockMemberText(memberFrame)
+    memberFrame.__nuzi_name_color = nil
+    memberFrame.__nuzi_class_color = nil
+    if type(memberFrame.__nuzi_name_label) == "table" then
+        safeSetText(memberFrame.__nuzi_name_label, "")
+        safeShow(memberFrame.__nuzi_name_label, false)
+    end
+    if type(memberFrame.__nuzi_class_label) == "table" then
+        safeSetText(memberFrame.__nuzi_class_label, "")
+        safeShow(memberFrame.__nuzi_class_label, false)
+    end
+    if type(memberFrame.__nuzi_gs_label) == "table" then
+        safeSetText(memberFrame.__nuzi_gs_label, "")
+        safeShow(memberFrame.__nuzi_gs_label, false)
+    end
+    suppressStockMemberArtifacts(memberFrame)
 end
 
 local function applyStockMemberText(memberFrame)
     if type(memberFrame) ~= "table" then
         return
     end
-    local unitToken = trimText(memberFrame.target)
+    local unitToken = trimText(memberFrame.__nuzi_raidtools_unit_token or memberFrame.target)
     if unitToken == "" then
-        memberFrame.__nuzi_name_color = nil
-        memberFrame.__nuzi_class_color = nil
-        if type(memberFrame.__nuzi_name_label) == "table" then
-            safeSetText(memberFrame.__nuzi_name_label, "")
-            safeShow(memberFrame.__nuzi_name_label, false)
-        end
-        if type(memberFrame.__nuzi_class_label) == "table" then
-            safeSetText(memberFrame.__nuzi_class_label, "")
-            safeShow(memberFrame.__nuzi_class_label, false)
-        end
-        if type(memberFrame.__nuzi_gs_label) == "table" then
-            safeSetText(memberFrame.__nuzi_gs_label, "")
-            safeShow(memberFrame.__nuzi_gs_label, false)
-        end
-        suppressStockMemberArtifacts(memberFrame)
-        layoutStockMemberLabels(memberFrame)
+        clearStockMemberText(memberFrame)
         return
     end
 
     local info, unitId, infoById = getRaidUnitContext(unitToken)
-    local displayName = getRaidUnitDisplayName(unitToken, unitId, info, infoById, memberFrame)
+    local displayName = getRaidUnitDisplayName(unitToken, unitId, info, infoById)
+    if displayName == "" then
+        clearStockMemberText(memberFrame)
+        return
+    end
     local className = getRaidUnitClass(unitToken, info, infoById)
     local gearscore = getRaidUnitGearScore(unitToken, unitId, info, infoById)
     local roleKey = getRaidUnitRoleKey(unitToken, displayName)
@@ -1240,16 +1239,16 @@ local function layoutRaidManagerPartyFrame(raidManager, partyFrame, partyIndex, 
         return
     end
 
-    local columns = 4
+    local columns = 5
     local leftPad = 12
     local topPad = 38
-    local colGap = 12
-    local rowGap = 20
-    local headerHeight = 20
+    local colGap = 8
+    local rowGap = 12
+    local headerHeight = 18
     local rowHeight = 18
-    local rowSpacing = 4
-    local columnWidth = math.max(170, math.floor((stockWidth - leftPad * 2 - colGap * (columns - 1)) / columns))
-    local partyHeight = headerHeight + 6 + (rowHeight + rowSpacing) * 5
+    local rowSpacing = 1
+    local columnWidth = math.max(150, math.floor((stockWidth - leftPad * 2 - colGap * (columns - 1)) / columns))
+    local partyHeight = headerHeight + 4 + rowHeight * 5 + rowSpacing * 4
     local col = (partyIndex - 1) % columns
     local row = math.floor((partyIndex - 1) / columns)
     local x = leftPad + col * (columnWidth + colGap)
@@ -1287,6 +1286,9 @@ local function layoutRaidManagerPartyFrame(raidManager, partyFrame, partyIndex, 
     for slot = 1, 5 do
         local memberFrame = partyFrame.member[slot]
         if type(memberFrame) == "table" then
+            memberFrame.__nuzi_raidtools_unit_token = "team" .. tostring((partyIndex - 1) * 5 + slot)
+            memberFrame.__nuzi_raidtools_party = partyIndex
+            memberFrame.__nuzi_raidtools_slot = slot
             safeRemoveAllAnchors(memberFrame)
             if memberFrame.SetExtent ~= nil then
                 memberFrame:SetExtent(columnWidth, rowHeight)
@@ -1405,9 +1407,9 @@ end
 
 local function getFloatingIconPath(isRecruiting)
     if isRecruiting then
-        return assetPath("nuzi-raidtools/auto_off.png")
+        return assetPath("nuzi-raidtools/auto_on.png")
     end
-    return assetPath("nuzi-raidtools/auto_on.png")
+    return assetPath("nuzi-raidtools/auto_off.png")
 end
 
 local function getFloatingIconExtent(settings)
@@ -1473,6 +1475,9 @@ function RaidManagerUi.SyncRecruitWidgets()
     if State.widgets.floating_icon_size_slider ~= nil then
         safeSetSliderValue(State.widgets.floating_icon_size_slider, getFloatingIconSize(settings))
     end
+    if State.widgets.always_visible_checkbox ~= nil then
+        State.widgets.always_visible_checkbox:SetChecked(settings.always_visible and true or false)
+    end
     if State.floating_button ~= nil then
         applyFloatingButtonLayout()
         syncFloatingButtonIcon()
@@ -1504,6 +1509,18 @@ function RaidManagerUi.SyncAutoInviteWidgets()
     end
     if State.widgets.whitelist_auto_invite_on_cadence_checkbox ~= nil then
         State.widgets.whitelist_auto_invite_on_cadence_checkbox:SetChecked(settings.whitelist_auto_invite_on_cadence and true or false)
+    end
+    if State.widgets.remote_auto_invite_controls_checkbox ~= nil then
+        State.widgets.remote_auto_invite_controls_checkbox:SetChecked(settings.remote_auto_invite_controls and true or false)
+    end
+    if State.widgets.guild_auto_learn_checkbox ~= nil then
+        State.widgets.guild_auto_learn_checkbox:SetChecked(settings.guild_auto_learn and true or false)
+    end
+    if State.widgets.expedition_sync_checkbox ~= nil then
+        State.widgets.expedition_sync_checkbox:SetChecked(settings.expedition_sync_enabled and true or false)
+    end
+    if State.widgets.expedition_sync_name_input ~= nil and State.widgets.expedition_sync_name_input.SetText ~= nil then
+        State.widgets.expedition_sync_name_input:SetText(tostring(settings.expedition_sync_name or "macro"))
     end
 end
 
@@ -1670,7 +1687,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
     local pageTitle = createThemedLabel(
         contentPanel,
         "nuziRaidtoolsSettingsPageTitle",
-        "Raid Manager Controls",
+        "Raid Setup",
         16,
         300,
         18,
@@ -1682,7 +1699,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
     local pageSummary = createWrappedThemedLabel(
         contentPanel,
         "nuziRaidtoolsSettingsPageSummary",
-        "Recruiting, list tools, roles, and lead handoff manager.",
+        "Recruiting, lists, automation, roles, and lead handoff.",
         12,
         330,
         "hint",
@@ -1709,11 +1726,11 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
     local autoInviteCard = createSectionCard(
         content,
         "nuziRaidtoolsAutoInviteCard",
-        "Auto-Invite",
-        "Run your recruit message here.",
+        "Recruiting",
+        "Phrase, chat scope, and start/stop.",
         sectionY,
         cardWidth,
-        246
+        218
     )
     if autoInviteCard ~= nil then
         local recruitButton = Utils.CreateButton(autoInviteCard, "nuziRaidtoolsRecruitButton", "Start Auto-Invite", cardWidth - 28, 32)
@@ -1759,33 +1776,17 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         end
         State.widgets.chat_filter_dropdown = scopeDropdown
 
-        local alwaysVisibleCheckbox = createCheckboxRow(
-            autoInviteCard,
-            "nuziRaidtoolsAlwaysVisible",
-            "Always show the floating auto-invite icon",
-            14,
-            210,
-            286
-        )
-        alwaysVisibleCheckbox:SetChecked(settings.always_visible and true or false)
-        function alwaysVisibleCheckbox:OnCheckChanged()
-            settings.always_visible = self:GetChecked() and true or false
-            Shared.SaveSettings()
-            RaidManagerUi.UpdateFloatingButtonVisibility()
-        end
-        alwaysVisibleCheckbox:SetHandler("OnCheckChanged", alwaysVisibleCheckbox.OnCheckChanged)
-        State.widgets.always_visible_checkbox = alwaysVisibleCheckbox
     end
-    sectionY = sectionY + 258
+    sectionY = sectionY + 230
 
     local listCard = createSectionCard(
         content,
         "nuziRaidtoolsListCard",
         "Lists",
-        "Open the list manager to edit your lists.",
+        "Pick who automation trusts.",
         sectionY,
         cardWidth,
-        370
+        274
     )
     if listCard ~= nil then
         local activeListLabel = createThemedLabel(listCard, "nuziRaidtoolsActiveListLabel", "Active Whitelist", 12, 240, 18, "text")
@@ -1876,13 +1877,25 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         end
         recruitWhitelistCheckbox:SetHandler("OnCheckChanged", recruitWhitelistCheckbox.OnCheckChanged)
         State.widgets.recruit_whitelist_checkbox = recruitWhitelistCheckbox
+    end
+    sectionY = sectionY + 286
 
+    local automationCard = createSectionCard(
+        content,
+        "nuziRaidtoolsAutomationCard",
+        "Roster Automation",
+        "Automatic invites and list updates.",
+        sectionY,
+        cardWidth,
+        336
+    )
+    if automationCard ~= nil then
         local whitelistAutoInviteCheckbox = createCheckboxRow(
-            listCard,
+            automationCard,
             "nuziRaidtoolsWhitelistAutoInvite",
-            "Auto-invite enabled speakers without phrase match",
+            "Invite enabled list members without phrase match",
             14,
-            258,
+            68,
             286
         )
         whitelistAutoInviteCheckbox:SetChecked(settings.whitelist_auto_invite and true or false)
@@ -1895,12 +1908,12 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         State.widgets.whitelist_auto_invite_checkbox = whitelistAutoInviteCheckbox
 
         local whitelistAutoInviteOnLoginCheckbox = createCheckboxRow(
-            listCard,
+            automationCard,
             "nuziRaidtoolsWhitelistAutoInviteOnLogin",
-            "Invite enabled names on login",
-            30,
-            286,
-            270
+            "Invite enabled list members on login",
+            14,
+            96,
+            286
         )
         whitelistAutoInviteOnLoginCheckbox:SetChecked(settings.whitelist_auto_invite_on_login and true or false)
         function whitelistAutoInviteOnLoginCheckbox:OnCheckChanged()
@@ -1912,12 +1925,12 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         State.widgets.whitelist_auto_invite_on_login_checkbox = whitelistAutoInviteOnLoginCheckbox
 
         local whitelistAutoInviteOnCadenceCheckbox = createCheckboxRow(
-            listCard,
+            automationCard,
             "nuziRaidtoolsWhitelistAutoInviteOnCadence",
-            "Invite enabled names every 60s",
-            30,
-            314,
-            270
+            "Invite enabled list members every 60s",
+            14,
+            124,
+            286
         )
         whitelistAutoInviteOnCadenceCheckbox:SetChecked(settings.whitelist_auto_invite_on_cadence and true or false)
         function whitelistAutoInviteOnCadenceCheckbox:OnCheckChanged()
@@ -1929,21 +1942,77 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         whitelistAutoInviteOnCadenceCheckbox:SetHandler("OnCheckChanged", whitelistAutoInviteOnCadenceCheckbox.OnCheckChanged)
         State.widgets.whitelist_auto_invite_on_cadence_checkbox = whitelistAutoInviteOnCadenceCheckbox
 
-        local whitelistHelp = createWrappedThemedLabel(
-            listCard,
-            "nuziRaidtoolsWhitelistInviteHelp",
-            "Enabled lists also drive reply gating, login invites, and cadence invites.",
-            10,
-            cardWidth - 28,
-            "hint",
-            2,
-            14
+        local guildAutoLearnCheckbox = createCheckboxRow(
+            automationCard,
+            "nuziRaidtoolsGuildAutoLearn",
+            "Add guild-chat recruit speakers to the active list",
+            14,
+            152,
+            286
         )
-        if whitelistHelp ~= nil then
-            whitelistHelp:AddAnchor("TOPLEFT", listCard, 14, 342)
+        guildAutoLearnCheckbox:SetChecked(settings.guild_auto_learn and true or false)
+        function guildAutoLearnCheckbox:OnCheckChanged()
+            settings.guild_auto_learn = self:GetChecked() and true or false
+            Shared.SaveSettings()
+            RaidManagerUi.SyncAutoInviteWidgets()
         end
+        guildAutoLearnCheckbox:SetHandler("OnCheckChanged", guildAutoLearnCheckbox.OnCheckChanged)
+        State.widgets.guild_auto_learn_checkbox = guildAutoLearnCheckbox
+
+        local expeditionSyncCheckbox = createCheckboxRow(
+            automationCard,
+            "nuziRaidtoolsExpeditionSync",
+            "Sync active list from current raid expedition",
+            14,
+            180,
+            286
+        )
+        expeditionSyncCheckbox:SetChecked(settings.expedition_sync_enabled and true or false)
+        function expeditionSyncCheckbox:OnCheckChanged()
+            settings.expedition_sync_enabled = self:GetChecked() and true or false
+            Runtime.ResetExpeditionSyncTicker()
+            Shared.SaveSettings()
+            RaidManagerUi.SyncAutoInviteWidgets()
+        end
+        expeditionSyncCheckbox:SetHandler("OnCheckChanged", expeditionSyncCheckbox.OnCheckChanged)
+        State.widgets.expedition_sync_checkbox = expeditionSyncCheckbox
+
+        local expeditionNameLabel = createThemedLabel(automationCard, "nuziRaidtoolsExpeditionNameLabel", "Expedition", 12, 220, 18, "text")
+        if expeditionNameLabel ~= nil then
+            expeditionNameLabel:AddAnchor("TOPLEFT", automationCard, 14, 210)
+        end
+
+        local expeditionNameInput = Utils.CreateEditBox(automationCard, "nuziRaidtoolsExpeditionNameInput", "macro", 214, 30, 64)
+        expeditionNameInput:AddAnchor("TOPLEFT", automationCard, 14, 232)
+        expeditionNameInput:SetText(tostring(settings.expedition_sync_name or "macro"))
+        State.widgets.expedition_sync_name_input = expeditionNameInput
+
+        local expeditionNameSave = Utils.CreateButton(automationCard, "nuziRaidtoolsExpeditionNameSave", "Save", 80, 30)
+        expeditionNameSave:AddAnchor("TOPLEFT", automationCard, 236, 232)
+        expeditionNameSave:SetHandler("OnClick", function()
+            expeditionNameInput:SetText(Runtime.SaveExpeditionSyncName(expeditionNameInput:GetText()))
+            Runtime.ResetExpeditionSyncTicker()
+        end)
+        State.widgets.expedition_sync_name_save = expeditionNameSave
+
+        local remoteControlsCheckbox = createCheckboxRow(
+            automationCard,
+            "nuziRaidtoolsRemoteAutoInviteControls",
+            "Allow chat stop/start commands",
+            14,
+            276,
+            286
+        )
+        remoteControlsCheckbox:SetChecked(settings.remote_auto_invite_controls and true or false)
+        function remoteControlsCheckbox:OnCheckChanged()
+            settings.remote_auto_invite_controls = self:GetChecked() and true or false
+            Shared.SaveSettings()
+            RaidManagerUi.SyncAutoInviteWidgets()
+        end
+        remoteControlsCheckbox:SetHandler("OnCheckChanged", remoteControlsCheckbox.OnCheckChanged)
+        State.widgets.remote_auto_invite_controls_checkbox = remoteControlsCheckbox
     end
-    sectionY = sectionY + 382
+    sectionY = sectionY + 348
 
     local rolesCard = createSectionCard(
         content,
@@ -2080,16 +2149,33 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
     local iconCard = createSectionCard(
         content,
         "nuziRaidtoolsFloatingIconCard",
-        "Floating Icon",
-        "Size the auto-invite launcher.",
+        "Display",
+        "Floating launcher preferences.",
         sectionY,
         cardWidth,
-        128
+        164
     )
     if iconCard ~= nil then
+        local alwaysVisibleCheckbox = createCheckboxRow(
+            iconCard,
+            "nuziRaidtoolsAlwaysVisible",
+            "Always show the floating auto-invite icon",
+            14,
+            68,
+            286
+        )
+        alwaysVisibleCheckbox:SetChecked(settings.always_visible and true or false)
+        function alwaysVisibleCheckbox:OnCheckChanged()
+            settings.always_visible = self:GetChecked() and true or false
+            Shared.SaveSettings()
+            RaidManagerUi.UpdateFloatingButtonVisibility()
+        end
+        alwaysVisibleCheckbox:SetHandler("OnCheckChanged", alwaysVisibleCheckbox.OnCheckChanged)
+        State.widgets.always_visible_checkbox = alwaysVisibleCheckbox
+
         local iconSizeLabel = createThemedLabel(iconCard, "nuziRaidtoolsFloatingIconSizeLabel", "Icon Size", 12, 120, 18, "text")
         if iconSizeLabel ~= nil then
-            iconSizeLabel:AddAnchor("TOPLEFT", iconCard, 14, 70)
+            iconSizeLabel:AddAnchor("TOPLEFT", iconCard, 14, 104)
         end
 
         local iconSizeValue = createThemedLabel(
@@ -2102,7 +2188,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
             "hint"
         )
         if iconSizeValue ~= nil then
-            iconSizeValue:AddAnchor("TOPRIGHT", iconCard, -14, 70)
+            iconSizeValue:AddAnchor("TOPRIGHT", iconCard, -14, 104)
         end
         State.widgets.floating_icon_size_value = iconSizeValue
 
@@ -2114,7 +2200,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
             FLOATING_ICON_MAX_SIZE
         )
         if iconSizeSlider ~= nil then
-            iconSizeSlider:AddAnchor("TOPLEFT", iconCard, 88, 66)
+            iconSizeSlider:AddAnchor("TOPLEFT", iconCard, 88, 100)
             safeSetSliderValue(iconSizeSlider, getFloatingIconSize(settings))
             iconSizeSlider:SetHandler("OnSliderChanged", function(_, raw)
                 local size = math.floor(clampNumber(raw, FLOATING_ICON_MIN_SIZE, FLOATING_ICON_MAX_SIZE, 40) + 0.5)
@@ -2127,7 +2213,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
             State.widgets.floating_icon_size_slider = iconSizeSlider
         end
     end
-    sectionY = sectionY + 140
+    sectionY = sectionY + 176
 
     scrollFrame:ResetScroll(sectionY + 8)
 end
@@ -2195,7 +2281,7 @@ function RaidManagerUi.BuildRaidManagerUi()
     local stockExtraWidth = 260
     local totalWidth = currentWidth + stockExtraWidth
     pcall(function()
-        raidManager:SetExtent(totalWidth, 760)
+        raidManager:SetExtent(totalWidth, 380)
     end)
     raidManager.__nuzi_raidtools_stock_width = currentWidth + stockExtraWidth
     RaidManagerUi.PatchRaidManagerMembers(raidManager)

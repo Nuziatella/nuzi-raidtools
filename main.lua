@@ -40,7 +40,7 @@ local ListManager = modules.list_manager
 local addon = Shared ~= nil and Shared.ADDON or {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.1",
+    version = "2.0.2",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -96,12 +96,20 @@ local function onChatMessage(channelId, speakerId, _, speakerName, message)
     local resolvedSpeakerName = tostring(speakerName or "")
     local resolvedMessage = tostring(message or "")
     local loweredMessage = string.lower(resolvedMessage)
+    local autoInviteChanged = Runtime.HandleRemoteAutoInviteCommand(channelId, resolvedSpeakerName, loweredMessage)
     local leadSettingsChanged = Runtime.HandleLeadSniffing(channelId, resolvedSpeakerName, loweredMessage)
     Runtime.HandleWhitelistLoginAnnouncement(resolvedSpeakerName, resolvedMessage)
     Runtime.HandleRecruitMessage(channelId, resolvedSpeakerName, loweredMessage)
+    if autoInviteChanged then
+        RaidManagerUi.SyncRecruitWidgets()
+    end
     if leadSettingsChanged then
         RaidManagerUi.SyncLeadWidgets()
     end
+end
+
+local function onAcquaintanceLogin(characterName)
+    Runtime.HandleAcquaintanceLogin(characterName)
 end
 
 local function onUpdate(dt)
@@ -113,6 +121,16 @@ local function onUpdate(dt)
     if Shared.state.auto_invite_cadence_ticker ~= nil and Shared.state.auto_invite_cadence_ticker.Run ~= nil then
         Shared.state.auto_invite_cadence_ticker:Run(dt, nil, function()
             Runtime.RunWhitelistAutoInviteCadence()
+        end)
+    end
+    if Shared.state.login_invite_queue_ticker ~= nil and Shared.state.login_invite_queue_ticker.Run ~= nil then
+        Shared.state.login_invite_queue_ticker:Run(dt, nil, function()
+            Runtime.ProcessLoginInviteQueue()
+        end)
+    end
+    if Shared.state.expedition_sync_ticker ~= nil and Shared.state.expedition_sync_ticker.Run ~= nil then
+        Shared.state.expedition_sync_ticker:Run(dt, nil, function()
+            Runtime.RunExpeditionWhitelistSync()
         end)
     end
     RaidManagerUi.SyncSettingsPanelVisibility()
@@ -147,12 +165,21 @@ local function onLoad()
     Shared.state.events:OptionalOnSafe("COMMUNITY_CHAT_MESSAGE", "COMMUNITY_CHAT_MESSAGE", onChatMessage)
     Shared.state.events:OnSafe("UPDATE", "UPDATE", onUpdate)
     Shared.state.events:OnSafe("UI_RELOADED", "UI_RELOADED", onUiReloaded)
+    Shared.state.private_events = Events.CreateEventWindow({
+        logger = logger,
+        id = "nuziRaidtoolsEventWindow"
+    })
+    Shared.state.private_events:OptionalOnSafe("ACQUAINTANCE_LOGIN", "ACQUAINTANCE_LOGIN", onAcquaintanceLogin)
 end
 
 local function onUnload()
     if Shared ~= nil and Shared.state.events ~= nil then
         Shared.state.events:ClearAll()
         Shared.state.events = nil
+    end
+    if Shared ~= nil and Shared.state.private_events ~= nil then
+        Shared.state.private_events:ClearAll()
+        Shared.state.private_events = nil
     end
     if ListManager ~= nil and ListManager.Free ~= nil then
         ListManager.Free()

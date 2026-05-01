@@ -6,6 +6,7 @@ Raid management, but with less menu wrestling and fewer "who has lead?" moments.
 
 - auto-invite from recruit chat
 - whitelist and blacklist management
+- roster automation from guild chat, login events, and expedition sync
 - give-lead protection and handoff tools
 - quick raid role assignment
 - a cleaner raid info view that focuses on `Name / Class / GS`
@@ -37,7 +38,16 @@ If you only want trusted names to trigger invites, enable whitelist recruiting a
 3. Toggle `Start Auto-Invite`.
 4. Anyone who matches your rules can be invited automatically.
 
-You can also enable whitelist auto-invite if you want selected names to skip the normal recruit phrase check.
+You can also enable list automation if you want selected names to skip the normal recruit phrase check, receive delayed login invites, or get cadence invites while recruiting.
+
+### Roster Automation
+
+Use `Roster Automation` to:
+
+- add guild-chat recruit speakers to the active whitelist
+- invite enabled whitelist members on login or every 60 seconds
+- sync the active whitelist from raid members in a named expedition
+- allow trusted chat stop/start controls for auto-invite
 
 ### List Manager
 
@@ -77,7 +87,8 @@ Less clutter, less squinting, fewer excuses.
 ## Notes
 
 - Legacy root-level list files are migrated into `.data` automatically.
+- Release packages do not track or ship `.data`; your saved settings and lists stay local.
 - The addon keeps local settings and list files separate so they survive addon updates more reliably.
 - If something looks wrong after a major update, reload once so the latest saved settings are re-read cleanly.
 
-2.0.0
+2.0.2

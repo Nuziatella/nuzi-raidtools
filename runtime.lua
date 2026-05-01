@@ -154,6 +154,97 @@ function Runtime.CollectEnabledWhitelistMembers(settings)
     return out
 end
 
+local function listContainsName(list, name)
+    if type(list) ~= "table" then
+        return false
+    end
+    local key = normalizeKey(name)
+    if key == "" then
+        return false
+    end
+    for _, entry in ipairs(list) do
+        if normalizeKey(entry) == key then
+            return true
+        end
+    end
+    return false
+end
+
+local function addNameToList(list, name)
+    local formatted = Utils.FormatName(name)
+    if formatted == "" or listContainsName(list, formatted) then
+        return false
+    end
+    table.insert(list, formatted)
+    return true
+end
+
+local function removeNameFromList(list, name)
+    if type(list) ~= "table" then
+        return false
+    end
+    local key = normalizeKey(name)
+    if key == "" then
+        return false
+    end
+    for index = #list, 1, -1 do
+        if normalizeKey(list[index]) == key then
+            table.remove(list, index)
+            return true
+        end
+    end
+    return false
+end
+
+local function resolveAutomationWhitelist(settings, create)
+    if type(settings) ~= "table" then
+        return nil, nil, false
+    end
+    local changed = false
+    if type(settings.whitelists) ~= "table" then
+        settings.whitelists = {}
+        changed = true
+    end
+    local listName = trimText(settings.active_whitelist)
+    if listName == "" or listName == "Select Whitelist" then
+        listName = Shared.CONSTANTS.DEFAULT_AUTOMATION_WHITELIST
+        settings.active_whitelist = listName
+        changed = true
+    end
+    if type(settings.whitelists[listName]) ~= "table" then
+        if not create then
+            return listName, nil, changed
+        end
+        settings.whitelists[listName] = {}
+        changed = true
+    end
+    if type(settings.enabled_whitelists) ~= "table" then
+        settings.enabled_whitelists = {}
+        changed = true
+    end
+    local listKey = normalizeKey(listName)
+    if listKey ~= "" and settings.enabled_whitelists[listKey] ~= true then
+        settings.enabled_whitelists[listKey] = true
+        changed = true
+    end
+    return listName, settings.whitelists[listName], changed
+end
+
+function Runtime.AddNameToAutomationWhitelist(name)
+    local settings = getSettings()
+    local listName, list = resolveAutomationWhitelist(settings, true)
+    if type(list) ~= "table" then
+        return false
+    end
+    local added = addNameToList(list, name)
+    Shared.SaveSettings()
+    Runtime.RebuildEnabledWhitelistLookup()
+    if added then
+        Shared.logger:Info("Added " .. Utils.FormatName(name) .. " to " .. tostring(listName) .. ".")
+    end
+    return added
+end
+
 function Runtime.GetCurrentCharacterKey()
     if type(State.current_character_key) == "string"
         and State.current_character_key ~= ""
@@ -338,6 +429,49 @@ local function getNowMs()
     return tonumber(nowMs) or 0
 end
 
+local function queueLoginInvite(name)
+    local formatted = Utils.FormatName(name)
+    if formatted == "" then
+        return false
+    end
+    local key = normalizeKey(formatted)
+    local nowMs = getNowMs()
+    for _, queued in ipairs(State.login_invite_queue) do
+        if type(queued) == "table" and queued.key == key then
+            queued.due_ms = nowMs + Shared.CONSTANTS.WHITELIST_LOGIN_INVITE_DELAY_MS
+            return true
+        end
+    end
+    table.insert(State.login_invite_queue, {
+        key = key,
+        name = formatted,
+        due_ms = nowMs + Shared.CONSTANTS.WHITELIST_LOGIN_INVITE_DELAY_MS
+    })
+    return true
+end
+
+local function readTeamMemberInfo(index)
+    if api.Unit == nil or api.Unit.GetUnitId == nil then
+        return nil
+    end
+    local unitId = nil
+    pcall(function()
+        unitId = api.Unit:GetUnitId("team" .. tostring(index))
+    end)
+    unitId = normalizeUnitId(unitId)
+    if unitId == nil or api.Unit.GetUnitInfoById == nil then
+        return nil
+    end
+    local info = nil
+    pcall(function()
+        info = api.Unit:GetUnitInfoById(unitId)
+    end)
+    if type(info) == "table" then
+        return info
+    end
+    return nil
+end
+
 function Runtime.CanInviteSpeaker(formattedSpeaker)
     local key = normalizeKey(formattedSpeaker)
     if key == "" then
@@ -418,6 +552,36 @@ function Runtime.HandleWhitelistLoginAnnouncement(speakerName, message)
     })
 end
 
+function Runtime.HandleAcquaintanceLogin(characterName)
+    local settings = getSettings()
+    local formatted = Utils.FormatName(characterName)
+    if formatted == ""
+        or not settings.is_recruiting
+        or not settings.whitelist_auto_invite_on_login
+        or not Runtime.IsSpeakerInEnabledWhitelist(formatted)
+        or not Runtime.CanSendRaidInvites() then
+        return false
+    end
+    return queueLoginInvite(formatted)
+end
+
+function Runtime.ProcessLoginInviteQueue()
+    local nowMs = getNowMs()
+    for index = #State.login_invite_queue, 1, -1 do
+        local queued = State.login_invite_queue[index]
+        if type(queued) ~= "table" or tonumber(queued.due_ms) == nil then
+            table.remove(State.login_invite_queue, index)
+        elseif nowMs >= queued.due_ms then
+            Runtime.InviteNamesToRaid({ queued.name }, {
+                skip_player = true,
+                skip_in_raid = true,
+                respect_cooldown = true
+            })
+            table.remove(State.login_invite_queue, index)
+        end
+    end
+end
+
 function Runtime.RunWhitelistAutoInviteCadence()
     local settings = getSettings()
     if not settings.is_recruiting
@@ -438,9 +602,53 @@ function Runtime.RunWhitelistAutoInviteCadence()
     })
 end
 
+function Runtime.RunExpeditionWhitelistSync()
+    local settings = getSettings()
+    if not settings.expedition_sync_enabled or readPlayerTeamIndex() == nil then
+        return
+    end
+
+    local expeditionName = normalizeKey(settings.expedition_sync_name)
+    if expeditionName == "" then
+        return
+    end
+
+    local listName, list, listChanged = resolveAutomationWhitelist(settings, true)
+    if type(list) ~= "table" then
+        return
+    end
+
+    local changed = listChanged
+    for index = 1, 50 do
+        local info = readTeamMemberInfo(index)
+        if type(info) == "table" then
+            local name = Utils.FormatName(info.name or info.unitName or "")
+            if name ~= "" then
+                if normalizeKey(info.expeditionName or info.expedition_name) == expeditionName then
+                    changed = addNameToList(list, name) or changed
+                else
+                    changed = removeNameFromList(list, name) or changed
+                end
+            end
+        end
+    end
+
+    if changed then
+        Shared.SaveSettings()
+        Runtime.RebuildEnabledWhitelistLookup()
+        Shared.logger:Info("Synced " .. tostring(listName) .. " from expedition " .. tostring(settings.expedition_sync_name) .. ".")
+    end
+end
+
 function Runtime.ResetAutoInviteCadenceTicker()
     if State.auto_invite_cadence_ticker ~= nil and State.auto_invite_cadence_ticker.Reset ~= nil then
         State.auto_invite_cadence_ticker:Reset()
+    end
+end
+
+function Runtime.ResetExpeditionSyncTicker()
+    if State.expedition_sync_ticker ~= nil and State.expedition_sync_ticker.Reset ~= nil then
+        State.expedition_sync_ticker:Reset()
     end
 end
 
@@ -503,6 +711,16 @@ function Runtime.SaveLeadCodeWord(value)
     return settings.lead_code_word
 end
 
+function Runtime.SaveExpeditionSyncName(value)
+    local settings = getSettings()
+    settings.expedition_sync_name = trimText(value or "")
+    if settings.expedition_sync_name == "" then
+        settings.expedition_sync_name = "macro"
+    end
+    Shared.SaveSettings()
+    return settings.expedition_sync_name
+end
+
 function Runtime.SaveGiveLeadWhitelist(text)
     local settings = getSettings()
     settings.give_lead_whitelist = Shared.ParseCommaList(text, Utils.FormatName)
@@ -539,6 +757,33 @@ function Runtime.IsGiveLeadSpeakerAllowed(speakerName)
     end
     local key = normalizeKey(Utils.FormatName(speakerName))
     return key ~= "" and State.give_lead_whitelist_lookup[key] == true
+end
+
+function Runtime.HandleRemoteAutoInviteCommand(channelId, speakerName, message)
+    local settings = getSettings()
+    if not settings.remote_auto_invite_controls then
+        return false
+    end
+    local normalizedMessage = normalizeKey(message)
+    if normalizedMessage ~= "stop auto-invite" and normalizedMessage ~= "start auto-invite" then
+        return false
+    end
+    if not Runtime.CanSendRaidInvites() or not Runtime.IsRecruitSpeakerAllowed(channelId, speakerName) then
+        return false
+    end
+    if normalizedMessage == "stop auto-invite" then
+        if settings.is_recruiting then
+            Runtime.SetRecruiting(false)
+            Shared.logger:Info("Auto-invite stopped by " .. Utils.FormatName(speakerName) .. ".")
+        end
+        return true
+    end
+    if settings.is_recruiting or trimText(settings.last_recruit_message) == "" then
+        return false
+    end
+    Runtime.SetRecruiting(true, settings.last_recruit_message)
+    Shared.logger:Info("Auto-invite started by " .. Utils.FormatName(speakerName) .. ".")
+    return true
 end
 
 function Runtime.HandleLeadSniffing(channel, speakerName, message)
@@ -608,9 +853,6 @@ function Runtime.HandleRecruitMessage(channelId, speakerName, message)
     if not settings.is_recruiting then
         return
     end
-    if not Runtime.IsRecruitSpeakerAllowed(channelId, formattedSpeaker) then
-        return
-    end
 
     local isWhitelistAutoInvite = settings.whitelist_auto_invite
         and tableHasEntries(State.enabled_whitelist_lookup)
@@ -629,6 +871,16 @@ function Runtime.HandleRecruitMessage(channelId, speakerName, message)
     end
 
     if not doesChatScopeMatch(settings, channelId) then
+        return
+    end
+
+    local learnedGuildSpeaker = false
+    if settings.guild_auto_learn and channelId == 7 and matchesRecruitMessage then
+        Runtime.AddNameToAutomationWhitelist(formattedSpeaker)
+        learnedGuildSpeaker = true
+    end
+
+    if not learnedGuildSpeaker and not Runtime.IsRecruitSpeakerAllowed(channelId, formattedSpeaker) then
         return
     end
 
@@ -656,8 +908,10 @@ function Runtime.OnLoad()
     Runtime.RebuildBlacklistLookup()
     Runtime.RebuildEnabledWhitelistLookup()
     Runtime.RebuildGiveLeadWhitelistLookup()
+    State.login_invite_queue = {}
     State.recruit_message = string.lower(tostring(settings.last_recruit_message or ""))
     Runtime.ResetAutoInviteCadenceTicker()
+    Runtime.ResetExpeditionSyncTicker()
 end
 
 return Runtime
