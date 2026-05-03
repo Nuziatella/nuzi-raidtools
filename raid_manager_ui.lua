@@ -15,6 +15,12 @@ local FloatingButtonPositions = nil
 local FLOATING_ICON_MIN_SIZE = 32
 local FLOATING_ICON_MAX_SIZE = 96
 local FLOATING_ICON_ASPECT = 1.5
+local FLOATING_BUTTON_POSITION_MAPPINGS = {
+    floating_button = {
+        x = "floating_button_x",
+        y = "floating_button_y"
+    }
+}
 
 function RaidManagerUi.Init(shared, utils, listManager, runtime)
     Shared = shared
@@ -30,12 +36,7 @@ function RaidManagerUi.Init(shared, utils, listManager, runtime)
             save_settings = function()
                 Shared.SaveSettings()
             end,
-            mappings = {
-                floating_button = {
-                    x = "floating_button_x",
-                    y = "floating_button_y"
-                }
-            },
+            mappings = FLOATING_BUTTON_POSITION_MAPPINGS,
             require_shift = false
         })
     end
@@ -2258,6 +2259,19 @@ function RaidManagerUi.CreateFloatingButton()
     State.floating_button = button
     syncFloatingButtonIcon()
     RaidManagerUi.SyncRecruitWidgets()
+end
+
+function RaidManagerUi.CaptureFloatingButtonPosition()
+    if State == nil or State.floating_button == nil then
+        return false
+    end
+    local ok = Positioning.SaveFromWidget(
+        getSettings(),
+        "floating_button",
+        State.floating_button,
+        FLOATING_BUTTON_POSITION_MAPPINGS
+    )
+    return ok and true or false
 end
 
 function RaidManagerUi.BuildRaidManagerUi()

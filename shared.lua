@@ -41,7 +41,7 @@ Shared.logger = logger
 Shared.ADDON = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.2",
+    version = "2.0.3",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -366,6 +366,7 @@ local MainStore = Settings.CreateAddonStore({
     DEFAULT_SETTINGS = Shared.DEFAULT_SETTINGS
 }, {
     prune_unknown = true,
+    skip_empty_default_tables = true,
     read_mode = "serialized_then_flat",
     write_mode = "serialized_then_flat",
     read_raw_text_fallback = true,
@@ -501,14 +502,16 @@ function Shared.SaveSettings()
     BlacklistStore.settings = Shared.state.settings.blacklist
     GiveLeadWhitelistStore.settings = Shared.state.settings.give_lead_whitelist
 
-    MainStore:Save()
-    WhitelistStore:Save()
-    BlacklistStore:Save()
-    GiveLeadWhitelistStore:Save()
+    local whitelistsOk = WhitelistStore:Save()
+    local blacklistOk = BlacklistStore:Save()
+    local giveLeadWhitelistOk = GiveLeadWhitelistStore:Save()
+    local mainOk = MainStore:Save()
 
     if type(saveCallback) == "function" then
         saveCallback()
     end
+
+    return whitelistsOk and blacklistOk and giveLeadWhitelistOk and mainOk
 end
 
 function Shared.GetSettings()
