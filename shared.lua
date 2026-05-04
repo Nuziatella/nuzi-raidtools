@@ -41,7 +41,7 @@ Shared.logger = logger
 Shared.ADDON = {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.3",
+    version = "2.0.18",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -63,8 +63,15 @@ Shared.CONSTANTS = {
     LOGIN_INVITE_QUEUE_INTERVAL_MS = 1000,
     EXPEDITION_SYNC_INTERVAL_MS = 120000,
     RAID_INFO_REFRESH_INTERVAL_MS = 500,
+    RAID_CHAT_CHANNEL_ID = 5,
+    RAID_STOP_AUTO_INVITE_COMMAND = "stop x",
+    RAID_MAX_MEMBERS = 50,
+    RAID_BUILTIN_SORT_COUNT = 4,
+    RAID_GROUP_COUNT = 10,
+    RAID_GROUP_SIZE = 5,
     DEFAULT_AUTO_ROLE_SELECTION = 4,
     DEFAULT_AUTOMATION_WHITELIST = "Guild Members",
+    LEGACY_EXPEDITION_AUTOMATION_WHITELIST = "Expedition Members",
     ATTACHED_SETTINGS_WIDTH = 392,
     ATTACHED_SETTINGS_HEIGHT = 708,
 }
@@ -97,6 +104,17 @@ Shared.DEFAULT_SETTINGS = {
     floating_button_y = 100,
     filter_selection = 1,
     dms_selection = 1,
+    raid_sort_mode = 1,
+    raid_sort_preset = "builtin:1",
+    raid_custom_sort_presets = {},
+    raid_sort_builder_draft = {
+        name = "",
+        role_order = { 1, 2, 3, 4 },
+        role_groups = { 0, 0, 0, 0 },
+        slot_roles = {},
+        gear_order = 1,
+        name_order = 1
+    },
     is_recruiting = false,
     last_recruit_message = "",
     lead_sniffing = true,
@@ -262,6 +280,139 @@ function Shared.NormalizeAutoInviteSettings(settings)
     settings.floating_icon_size = iconSize
 end
 
+function Shared.NormalizeRaidSortSettings(settings)
+    if type(settings) ~= "table" then
+        return
+    end
+    local sortMode = math.floor((tonumber(settings.raid_sort_mode) or 1) + 0.5)
+    if sortMode < 1 or sortMode > Shared.CONSTANTS.RAID_BUILTIN_SORT_COUNT then
+        sortMode = 1
+    end
+    settings.raid_sort_mode = sortMode
+    local customPresets = {}
+    local customPresetCount = 0
+    local function normalizeRoleOrder(value)
+        local out = {}
+        local seen = {}
+        if type(value) == "table" then
+            for _, role in ipairs(value) do
+                role = tonumber(role)
+                if role ~= nil and role >= 1 and role <= 4 and not seen[role] then
+                    seen[role] = true
+                    out[#out + 1] = role
+                end
+            end
+        end
+        for role = 1, 4 do
+            if not seen[role] then
+                out[#out + 1] = role
+            end
+        end
+        return out
+    end
+    local function normalizeRoleGroups(value)
+        local out = {}
+        for role = 1, 4 do
+            local raw = type(value) == "table" and (value[role] or value[tostring(role)]) or nil
+            local group = math.floor((tonumber(raw) or 0) + 0.5)
+            if group < 0 then
+                group = 0
+            elseif group > Shared.CONSTANTS.RAID_GROUP_COUNT then
+                group = Shared.CONSTANTS.RAID_GROUP_COUNT
+            end
+            out[role] = group
+        end
+        return out
+    end
+    local function normalizeSlotRoles(value)
+        local out = {}
+        if type(value) ~= "table" then
+            return out
+        end
+        for slot = 1, Shared.CONSTANTS.RAID_MAX_MEMBERS do
+            local raw = value[slot] or value[tostring(slot)]
+            local role = math.floor((tonumber(raw) or 0) + 0.5)
+            if role >= 1 and role <= 4 then
+                out[slot] = role
+            end
+        end
+        return out
+    end
+    if type(settings.raid_custom_sort_presets) == "table" then
+        for key, preset in pairs(settings.raid_custom_sort_presets) do
+            if type(preset) == "table" and customPresetCount < 30 then
+                local name = Shared.TrimText(preset.name or key)
+                if name ~= "" then
+                    name = string.sub(name, 1, 32)
+                    local presetKey = Shared.NormalizeKey(name)
+                    if presetKey ~= "" then
+                        local gearOrder = math.floor((tonumber(preset.gear_order) or 1) + 0.5)
+                        if gearOrder < 1 or gearOrder > 3 then
+                            gearOrder = 1
+                        end
+                        local nameOrder = math.floor((tonumber(preset.name_order) or 1) + 0.5)
+                        if nameOrder < 1 or nameOrder > 3 then
+                            nameOrder = 1
+                        end
+                        customPresets[presetKey] = {
+                            name = name,
+                            role_order = normalizeRoleOrder(preset.role_order),
+                            role_groups = normalizeRoleGroups(preset.role_groups),
+                            slot_roles = normalizeSlotRoles(preset.slot_roles),
+                            gear_order = gearOrder,
+                            name_order = nameOrder
+                        }
+                        customPresetCount = customPresetCount + 1
+                    end
+                end
+            end
+        end
+    end
+    settings.raid_custom_sort_presets = customPresets
+    local draft = type(settings.raid_sort_builder_draft) == "table" and settings.raid_sort_builder_draft or {}
+    local draftGearOrder = math.floor((tonumber(draft.gear_order) or 1) + 0.5)
+    if draftGearOrder < 1 or draftGearOrder > 3 then
+        draftGearOrder = 1
+    end
+    local draftNameOrder = math.floor((tonumber(draft.name_order) or 1) + 0.5)
+    if draftNameOrder < 1 or draftNameOrder > 3 then
+        draftNameOrder = 1
+    end
+    settings.raid_sort_builder_draft = {
+        name = string.sub(Shared.TrimText(draft.name or ""), 1, 32),
+        role_order = normalizeRoleOrder(draft.role_order),
+        role_groups = normalizeRoleGroups(draft.role_groups),
+        slot_roles = normalizeSlotRoles(draft.slot_roles),
+        gear_order = draftGearOrder,
+        name_order = draftNameOrder
+    }
+
+    local selectedPreset = Shared.TrimText(settings.raid_sort_preset)
+    local builtinMode = tonumber(string.match(selectedPreset, "^builtin:(%d+)$"))
+    if builtinMode ~= nil and builtinMode >= 1 and builtinMode <= Shared.CONSTANTS.RAID_BUILTIN_SORT_COUNT then
+        settings.raid_sort_mode = math.floor(builtinMode + 0.5)
+        settings.raid_sort_preset = "builtin:" .. tostring(settings.raid_sort_mode)
+    else
+        local customKey = string.match(selectedPreset, "^custom:(.+)$")
+        if customKey ~= nil and customPresets[customKey] ~= nil then
+            settings.raid_sort_preset = "custom:" .. customKey
+        else
+            settings.raid_sort_preset = "builtin:" .. tostring(sortMode)
+        end
+    end
+
+    settings.raid_auto_mark_highest_healer = nil
+    settings.raid_auto_mark_tanks = nil
+    settings.raid_mark_healer = nil
+    settings.raid_mark_tank_1 = nil
+    settings.raid_mark_tank_2 = nil
+    settings.raid_leader_target_mark_enabled = nil
+    settings.raid_leader_target_mark = nil
+    settings.raid_assist_marker_enabled = nil
+    settings.raid_assist_marker_source_mark = nil
+    settings.raid_assist_marker_display_mark = nil
+end
+
 function Shared.NormalizeNameList(value)
     if type(value) ~= "table" then
         return nil
@@ -284,10 +435,29 @@ function Shared.NormalizeWhitelistsTable(value)
         return nil
     end
     local out = {}
+    local function appendList(listName, names)
+        if out[listName] == nil then
+            out[listName] = {}
+        end
+        local seen = {}
+        for _, name in ipairs(out[listName]) do
+            seen[Shared.NormalizeKey(name)] = true
+        end
+        for _, name in ipairs(names or {}) do
+            local key = Shared.NormalizeKey(name)
+            if key ~= "" and not seen[key] then
+                seen[key] = true
+                table.insert(out[listName], name)
+            end
+        end
+    end
     for key, list in pairs(value) do
         local listName = Shared.TrimText(key)
         if listName ~= "" then
-            out[listName] = Shared.NormalizeNameList(list) or {}
+            if listName == Shared.CONSTANTS.LEGACY_EXPEDITION_AUTOMATION_WHITELIST then
+                listName = Shared.CONSTANTS.DEFAULT_AUTOMATION_WHITELIST
+            end
+            appendList(listName, Shared.NormalizeNameList(list) or {})
         end
     end
     return out
@@ -391,6 +561,7 @@ local MainStore = Settings.CreateAddonStore({
             settings.enabled_whitelists = {}
         end
         Shared.NormalizeAutoInviteSettings(settings)
+        Shared.NormalizeRaidSortSettings(settings)
         settings.lead_code_word = Shared.TrimText(settings.lead_code_word or "give lead")
         if settings.lead_code_word == "" then
             settings.lead_code_word = "give lead"
@@ -481,6 +652,10 @@ local function buildSettingsPayload(settings)
         floating_button_y = tonumber(settings.floating_button_y) or 100,
         filter_selection = tonumber(settings.filter_selection) or 1,
         dms_selection = tonumber(settings.dms_selection) or 1,
+        raid_sort_mode = tonumber(settings.raid_sort_mode) or 1,
+        raid_sort_preset = Shared.TrimText(settings.raid_sort_preset or "builtin:1"),
+        raid_custom_sort_presets = Shared.DeepCopy(settings.raid_custom_sort_presets or {}),
+        raid_sort_builder_draft = Shared.DeepCopy(settings.raid_sort_builder_draft or {}),
         is_recruiting = settings.is_recruiting and true or false,
         last_recruit_message = tostring(settings.last_recruit_message or ""),
         lead_sniffing = settings.lead_sniffing and true or false,
@@ -496,6 +671,7 @@ function Shared.SaveSettings()
     Shared.state.settings.blacklist = Shared.NormalizeNameList(Shared.state.settings.blacklist) or {}
     Shared.state.settings.give_lead_whitelist = Shared.NormalizeNameList(Shared.state.settings.give_lead_whitelist) or {}
     Shared.NormalizeAutoInviteSettings(Shared.state.settings)
+    Shared.NormalizeRaidSortSettings(Shared.state.settings)
 
     MainStore.settings = buildSettingsPayload(Shared.state.settings)
     WhitelistStore.settings = Shared.state.settings.whitelists
@@ -531,6 +707,7 @@ function Shared.GetSettings()
             Shared.state.settings.enabled_whitelists = {}
         end
         Shared.NormalizeAutoInviteSettings(Shared.state.settings)
+        Shared.NormalizeRaidSortSettings(Shared.state.settings)
         Shared.state.settings.whitelists = Shared.NormalizeWhitelistsTable(whitelists) or Shared.DeepCopy(Shared.DEFAULT_WHITELISTS)
         Shared.state.settings.blacklist = Shared.NormalizeNameList(blacklist) or Shared.DeepCopy(Shared.DEFAULT_BLACKLIST)
         Shared.state.settings.give_lead_whitelist = Shared.NormalizeNameList(giveLeadWhitelist) or Shared.DeepCopy(Shared.DEFAULT_GIVE_LEAD_WHITELIST)
@@ -574,6 +751,7 @@ function Shared.GetSettings()
         Shared.state.settings.enabled_whitelists = {}
     end
     Shared.NormalizeAutoInviteSettings(Shared.state.settings)
+    Shared.NormalizeRaidSortSettings(Shared.state.settings)
     Shared.state.settings.whitelists = Shared.NormalizeWhitelistsTable(Shared.state.settings.whitelists) or Shared.DeepCopy(Shared.DEFAULT_WHITELISTS)
     Shared.state.settings.blacklist = Shared.NormalizeNameList(Shared.state.settings.blacklist) or Shared.DeepCopy(Shared.DEFAULT_BLACKLIST)
     Shared.state.settings.give_lead_whitelist = Shared.NormalizeNameList(Shared.state.settings.give_lead_whitelist) or Shared.DeepCopy(Shared.DEFAULT_GIVE_LEAD_WHITELIST)

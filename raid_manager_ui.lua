@@ -15,6 +15,48 @@ local FloatingButtonPositions = nil
 local FLOATING_ICON_MIN_SIZE = 32
 local FLOATING_ICON_MAX_SIZE = 96
 local FLOATING_ICON_ASPECT = 1.5
+local RAID_SORT_OPTIONS = {
+    "Tanks > Healers > DPS",
+    "Healers > Tanks > DPS",
+    "Gearscore High > Low",
+    "Gearscore Low > High"
+}
+local RAID_GROUP_OPTIONS = {
+    "Any",
+    "Group 1",
+    "Group 2",
+    "Group 3",
+    "Group 4",
+    "Group 5",
+    "Group 6",
+    "Group 7",
+    "Group 8",
+    "Group 9",
+    "Group 10"
+}
+local RAID_ROLE_ORDER_OPTIONS = {
+    "Tank",
+    "Healer",
+    "DPS",
+    "Undecided"
+}
+local RAID_SLOT_ROLE_OPTIONS = {
+    "Any",
+    "Tank",
+    "Heal",
+    "DPS",
+    "Und"
+}
+local RAID_GEAR_ORDER_OPTIONS = {
+    "Gearscore High > Low",
+    "Gearscore Low > High",
+    "Ignore Gearscore"
+}
+local RAID_NAME_ORDER_OPTIONS = {
+    "Name A > Z",
+    "Name Z > A",
+    "Ignore Name"
+}
 local FLOATING_BUTTON_POSITION_MAPPINGS = {
     floating_button = {
         x = "floating_button_x",
@@ -232,6 +274,251 @@ local function safeSetSliderValue(slider, value)
     slider:SetValue(value, false)
 end
 
+local function safeSelectDropdown(dropdown, index)
+    if dropdown ~= nil and dropdown.Select ~= nil then
+        dropdown:Select(index)
+    end
+end
+
+local function getGroupDropdownIndex(group)
+    return math.floor(clampNumber(group, 0, #RAID_GROUP_OPTIONS - 1, 0) + 0.5) + 1
+end
+
+local function getGroupDropdownValue(dropdown)
+    if dropdown == nil or dropdown.GetSelectedIndex == nil then
+        return 0
+    end
+    return math.floor(clampNumber((dropdown:GetSelectedIndex() or 1) - 1, 0, #RAID_GROUP_OPTIONS - 1, 0) + 0.5)
+end
+
+local function getSlotRoleDropdownIndex(role)
+    return math.floor(clampNumber(role, 0, #RAID_SLOT_ROLE_OPTIONS - 1, 0) + 0.5) + 1
+end
+
+local function getSlotRoleDropdownValue(dropdown)
+    if dropdown == nil or dropdown.GetSelectedIndex == nil then
+        return 0
+    end
+    return math.floor(clampNumber((dropdown:GetSelectedIndex() or 1) - 1, 0, #RAID_SLOT_ROLE_OPTIONS - 1, 0) + 0.5)
+end
+
+local function getCustomSortEntries(settings)
+    local entries = {}
+    if type(settings) == "table" and type(settings.raid_custom_sort_presets) == "table" then
+        for key, preset in pairs(settings.raid_custom_sort_presets) do
+            if type(preset) == "table" then
+                local name = trimText(preset.name or key)
+                if name ~= "" then
+                    entries[#entries + 1] = {
+                        key = key,
+                        name = name,
+                        preset = preset
+                    }
+                end
+            end
+        end
+    end
+    table.sort(entries, function(a, b)
+        return string.lower(a.name) < string.lower(b.name)
+    end)
+    return entries
+end
+
+local function buildRaidSortDropdownItems(settings)
+    local items = {}
+    local ids = {}
+    for index, label in ipairs(RAID_SORT_OPTIONS) do
+        items[#items + 1] = label
+        ids[#ids + 1] = "builtin:" .. tostring(index)
+    end
+    for _, entry in ipairs(getCustomSortEntries(settings)) do
+        items[#items + 1] = "Custom: " .. entry.name
+        ids[#ids + 1] = "custom:" .. entry.key
+    end
+    return items, ids
+end
+
+local function getRaidSortSelectionIndex(settings, ids)
+    local selected = trimText(settings ~= nil and settings.raid_sort_preset or "")
+    if selected == "" then
+        local fallbackMode = settings ~= nil and tonumber(settings.raid_sort_mode) or 1
+        selected = "builtin:" .. tostring(fallbackMode or 1)
+    end
+    for index, id in ipairs(ids or {}) do
+        if id == selected then
+            return index
+        end
+    end
+    return 1
+end
+
+local function refreshRaidSortDropdown()
+    local dropdown = State.widgets.raid_sort_mode_dropdown
+    if dropdown == nil then
+        return
+    end
+    local settings = getSettings()
+    local items, ids = buildRaidSortDropdownItems(settings)
+    dropdown.dropdownItem = items
+    State.raid_sort_preset_ids = ids
+    dropdown.__nuzi_syncing_sort = true
+    safeSelectDropdown(dropdown, getRaidSortSelectionIndex(settings, ids))
+    dropdown.__nuzi_syncing_sort = false
+end
+
+local function refreshRaidSortBuilderPresetDropdown()
+    local dropdown = State.widgets.raid_sort_builder_preset_dropdown
+    if dropdown == nil then
+        return
+    end
+    local items = { "New Preset" }
+    local ids = { "" }
+    for _, entry in ipairs(getCustomSortEntries(getSettings())) do
+        items[#items + 1] = entry.name
+        ids[#ids + 1] = entry.key
+    end
+    dropdown.dropdownItem = items
+    State.raid_sort_builder_preset_ids = ids
+    local selectedIndex = 1
+    local selectedKey = State.raid_sort_builder_key or ""
+    for index, key in ipairs(ids) do
+        if key == selectedKey then
+            selectedIndex = index
+            break
+        end
+    end
+    dropdown.__nuzi_syncing_builder = true
+    safeSelectDropdown(dropdown, selectedIndex)
+    dropdown.__nuzi_syncing_builder = false
+end
+
+local function getCustomSortPreset(key)
+    local settings = getSettings()
+    if key ~= nil and key ~= "" and type(settings.raid_custom_sort_presets) == "table" then
+        return settings.raid_custom_sort_presets[key]
+    end
+    return nil
+end
+
+local function getBuilderRoleDropdown(index)
+    return State.widgets["raid_sort_builder_role_" .. tostring(index)]
+end
+
+local function getBuilderRoleGroupDropdown(role)
+    return State.widgets["raid_sort_builder_group_" .. tostring(role)]
+end
+
+local function getBuilderSlotRoleDropdown(slot)
+    return State.widgets["raid_sort_builder_slot_" .. tostring(slot)]
+end
+
+local function normalizeBuilderSlotRoles(value)
+    local out = {}
+    if type(value) == "table" then
+        for slot = 1, Shared.CONSTANTS.RAID_MAX_MEMBERS do
+            local role = math.floor((tonumber(value[slot] or value[tostring(slot)]) or 0) + 0.5)
+            if role >= 1 and role <= 4 then
+                out[slot] = role
+            end
+        end
+    end
+    return out
+end
+
+local function syncSlotLayoutDropdowns()
+    local slotRoles = normalizeBuilderSlotRoles(State.raid_sort_builder_slot_roles)
+    for slot = 1, Shared.CONSTANTS.RAID_MAX_MEMBERS do
+        safeSelectDropdown(getBuilderSlotRoleDropdown(slot), getSlotRoleDropdownIndex(slotRoles[slot] or 0))
+    end
+end
+
+local function getWidgetText(widget)
+    if widget ~= nil and widget.GetText ~= nil then
+        return tostring(widget:GetText() or "")
+    end
+    return ""
+end
+
+local function readBuilderRoleOrder()
+    local out = {}
+    local seen = {}
+    for index = 1, 4 do
+        local dropdown = getBuilderRoleDropdown(index)
+        local role = dropdown ~= nil and dropdown.GetSelectedIndex ~= nil and tonumber(dropdown:GetSelectedIndex()) or index
+        if role ~= nil and role >= 1 and role <= 4 and not seen[role] then
+            seen[role] = true
+            out[#out + 1] = role
+        end
+    end
+    for role = 1, 4 do
+        if not seen[role] then
+            out[#out + 1] = role
+        end
+    end
+    return out
+end
+
+local function readBuilderRoleGroups()
+    local out = {}
+    for role = 1, 4 do
+        out[role] = getGroupDropdownValue(getBuilderRoleGroupDropdown(role))
+    end
+    return out
+end
+
+local function readBuilderSlotRoles()
+    return normalizeBuilderSlotRoles(State.raid_sort_builder_slot_roles)
+end
+
+local function readRaidSortBuilderPresetFromWidgets()
+    local name = string.sub(trimText(getWidgetText(State.widgets.raid_sort_builder_name_input)), 1, 32)
+    local gearDropdown = State.widgets.raid_sort_builder_gear_dropdown
+    local nameDropdown = State.widgets.raid_sort_builder_name_dropdown
+    return {
+        name = name,
+        role_order = readBuilderRoleOrder(),
+        role_groups = readBuilderRoleGroups(),
+        slot_roles = readBuilderSlotRoles(),
+        gear_order = gearDropdown ~= nil and gearDropdown.GetSelectedIndex ~= nil and gearDropdown:GetSelectedIndex() or 1,
+        name_order = nameDropdown ~= nil and nameDropdown.GetSelectedIndex ~= nil and nameDropdown:GetSelectedIndex() or 1
+    }
+end
+
+local function setRaidSortBuilderFields(key, clearDraft)
+    State.raid_sort_builder_key = key or ""
+    local settings = getSettings()
+    local draft = type(settings.raid_sort_builder_draft) == "table" and settings.raid_sort_builder_draft or nil
+    local preset = getCustomSortPreset(State.raid_sort_builder_key)
+    if preset == nil and not clearDraft then
+        preset = draft
+    end
+    preset = preset or {
+        name = "",
+        role_order = { 1, 2, 3, 4 },
+        role_groups = { 0, 0, 0, 0 },
+        slot_roles = {},
+        gear_order = 1,
+        name_order = 1
+    }
+    if State.widgets.raid_sort_builder_name_input ~= nil then
+        State.widgets.raid_sort_builder_name_input:SetText(tostring(preset.name or ""))
+    end
+    for index = 1, 4 do
+        local dropdown = getBuilderRoleDropdown(index)
+        local role = tonumber(type(preset.role_order) == "table" and preset.role_order[index]) or index
+        safeSelectDropdown(dropdown, math.floor(clampNumber(role, 1, 4, index) + 0.5))
+    end
+    for role = 1, 4 do
+        local roleGroups = type(preset.role_groups) == "table" and preset.role_groups or nil
+        safeSelectDropdown(getBuilderRoleGroupDropdown(role), getGroupDropdownIndex(roleGroups ~= nil and roleGroups[role] or 0))
+    end
+    State.raid_sort_builder_slot_roles = normalizeBuilderSlotRoles(preset.slot_roles)
+    syncSlotLayoutDropdowns()
+    safeSelectDropdown(State.widgets.raid_sort_builder_gear_dropdown, math.floor(clampNumber(preset.gear_order, 1, 3, 1) + 0.5))
+    safeSelectDropdown(State.widgets.raid_sort_builder_name_dropdown, math.floor(clampNumber(preset.name_order, 1, 3, 1) + 0.5))
+    refreshRaidSortBuilderPresetDropdown()
+end
+
 local function applyPanelBackground(widget, alpha)
     if widget == nil then
         return nil
@@ -413,6 +700,143 @@ local function createWrappedThemedLabel(parent, id, text, fontSize, width, tone,
         label:SetExtent(safeWidth, height)
     end
     return label
+end
+
+local function hideRaidSortSlotLayoutWindow()
+    if State.widgets.raid_sort_slot_layout_window ~= nil then
+        safeShow(State.widgets.raid_sort_slot_layout_window, false)
+    end
+end
+
+local function buildRaidSortSlotLayoutWindow()
+    if State.widgets.raid_sort_slot_layout_window ~= nil then
+        return State.widgets.raid_sort_slot_layout_window
+    end
+    if api.Interface == nil then
+        return nil
+    end
+
+    local window = nil
+    if api.Interface.CreateEmptyWindow ~= nil then
+        window = api.Interface:CreateEmptyWindow("nuziRaidtoolsSortSlotLayoutWindow", "UIParent")
+    elseif api.Interface.CreateWindow ~= nil then
+        window = api.Interface:CreateWindow("nuziRaidtoolsSortSlotLayoutWindow", "Slot Layout", 0, 0)
+    end
+    if window == nil then
+        return nil
+    end
+    window:SetExtent(430, 520)
+    if State.widgets.raid_sort_builder_window ~= nil then
+        safeAddAnchor(window, "TOPLEFT", State.widgets.raid_sort_builder_window, "TOPRIGHT", 12, 0)
+    elseif State.widgets.settings_window ~= nil then
+        safeAddAnchor(window, "TOPLEFT", State.widgets.settings_window, "TOPRIGHT", 12, 0)
+    else
+        safeAddAnchor(window, "CENTER", "UIParent", nil, 0, 0)
+    end
+    applyPanelBackground(window, 0.94)
+    applyPanelAccent(window, 36, 0.10)
+    applyPanelDivider(window, 36, 12, -12, 0.14)
+    safeShow(window, false)
+    State.widgets.raid_sort_slot_layout_window = window
+
+    local title = createThemedLabel(window, "nuziRaidtoolsSortSlotLayoutTitle", "Slot Layout", 15, 260, 18, "title")
+    if title ~= nil then
+        title:AddAnchor("TOPLEFT", window, 14, 8)
+    end
+
+    local closeButton = Utils.CreateButton(window, "nuziRaidtoolsSortSlotLayoutClose", "X", 26, 22)
+    if closeButton ~= nil then
+        closeButton:AddAnchor("TOPRIGHT", window, -10, 6)
+        closeButton:SetHandler("OnClick", function()
+            hideRaidSortSlotLayoutWindow()
+        end)
+    end
+
+    for partySlot = 1, Shared.CONSTANTS.RAID_GROUP_SIZE do
+        local label = createThemedLabel(window, "nuziRaidtoolsSortSlotLayoutHeader" .. tostring(partySlot), "S" .. tostring(partySlot), 10, 58, 16, "hint")
+        if label ~= nil then
+            label:AddAnchor("TOPLEFT", window, 58 + ((partySlot - 1) * 70), 48)
+        end
+    end
+
+    for group = 1, Shared.CONSTANTS.RAID_GROUP_COUNT do
+        local rowY = 70 + ((group - 1) * 36)
+        local groupLabel = createThemedLabel(window, "nuziRaidtoolsSortSlotLayoutGroup" .. tostring(group), "G" .. tostring(group), 11, 32, 18, "hint")
+        if groupLabel ~= nil then
+            groupLabel:AddAnchor("TOPLEFT", window, 18, rowY + 6)
+        end
+        for partySlot = 1, Shared.CONSTANTS.RAID_GROUP_SIZE do
+            local slot = ((group - 1) * Shared.CONSTANTS.RAID_GROUP_SIZE) + partySlot
+            local dropdown = Utils.CreateComboBox(window, RAID_SLOT_ROLE_OPTIONS, 64, 28)
+            dropdown:AddAnchor("TOPLEFT", window, 50 + ((partySlot - 1) * 70), rowY)
+            dropdown.__nuzi_slot = slot
+            function dropdown:SelectedProc()
+                local slotRoles = normalizeBuilderSlotRoles(State.raid_sort_builder_slot_roles)
+                local role = getSlotRoleDropdownValue(self)
+                if role > 0 then
+                    slotRoles[self.__nuzi_slot] = role
+                else
+                    slotRoles[self.__nuzi_slot] = nil
+                end
+                State.raid_sort_builder_slot_roles = slotRoles
+            end
+            State.widgets["raid_sort_builder_slot_" .. tostring(slot)] = dropdown
+        end
+    end
+
+    local clearButton = Utils.CreateButton(window, "nuziRaidtoolsSortSlotLayoutClear", "Clear", 92, 30)
+    clearButton:AddAnchor("TOPLEFT", window, 18, 478)
+    clearButton:SetHandler("OnClick", function()
+        State.raid_sort_builder_slot_roles = {}
+        syncSlotLayoutDropdowns()
+    end)
+
+    local copyButton = Utils.CreateButton(window, "nuziRaidtoolsSortSlotLayoutCopy", "Copy G1", 92, 30)
+    copyButton:AddAnchor("TOPLEFT", window, 122, 478)
+    copyButton:SetHandler("OnClick", function()
+        local slotRoles = normalizeBuilderSlotRoles(State.raid_sort_builder_slot_roles)
+        local template = {}
+        for partySlot = 1, Shared.CONSTANTS.RAID_GROUP_SIZE do
+            template[partySlot] = slotRoles[partySlot] or 0
+        end
+        local out = {}
+        for group = 1, Shared.CONSTANTS.RAID_GROUP_COUNT do
+            for partySlot = 1, Shared.CONSTANTS.RAID_GROUP_SIZE do
+                local role = template[partySlot]
+                if role > 0 then
+                    out[((group - 1) * Shared.CONSTANTS.RAID_GROUP_SIZE) + partySlot] = role
+                end
+            end
+        end
+        State.raid_sort_builder_slot_roles = out
+        syncSlotLayoutDropdowns()
+    end)
+
+    local doneButton = Utils.CreateButton(window, "nuziRaidtoolsSortSlotLayoutDone", "Done", 92, 30)
+    doneButton:AddAnchor("TOPLEFT", window, 320, 478)
+    doneButton:SetHandler("OnClick", function()
+        hideRaidSortSlotLayoutWindow()
+    end)
+
+    syncSlotLayoutDropdowns()
+    return window
+end
+
+local function toggleRaidSortSlotLayout()
+    local window = buildRaidSortSlotLayoutWindow()
+    if window == nil then
+        return
+    end
+    local visible = false
+    if window.IsVisible ~= nil then
+        pcall(function()
+            visible = window:IsVisible() and true or false
+        end)
+    end
+    if not visible then
+        syncSlotLayoutDropdowns()
+    end
+    safeShow(window, not visible)
 end
 
 local function createSectionCard(parent, id, title, hint, y, width, height)
@@ -1525,6 +1949,10 @@ function RaidManagerUi.SyncAutoInviteWidgets()
     end
 end
 
+function RaidManagerUi.SyncRaidSortWidgets()
+    refreshRaidSortDropdown()
+end
+
 function RaidManagerUi.SyncLeadWidgets()
     local settings = getSettings()
     if State.widgets.lead_sniffing_checkbox ~= nil then
@@ -1554,6 +1982,7 @@ end
 
 function RaidManagerUi.ToggleSettingsPanel()
     local settings = getSettings()
+    RaidManagerUi.CaptureSettingsInputs()
     settings.settings_panel_visible = settings.settings_panel_visible == false
     Shared.SaveSettings()
     RaidManagerUi.SyncSettingsPanelVisibility()
@@ -1612,10 +2041,307 @@ function RaidManagerUi.SyncAll()
     RaidManagerUi.SyncListBackedInputs()
     RaidManagerUi.SyncWhitelistWidgets()
     RaidManagerUi.SyncAutoInviteWidgets()
+    RaidManagerUi.SyncRaidSortWidgets()
     RaidManagerUi.SyncLeadWidgets()
     RaidManagerUi.SyncRoleDropdownSelection()
     RaidManagerUi.SyncRecruitWidgets()
     RaidManagerUi.SyncSettingsPanelVisibility()
+end
+
+function RaidManagerUi.CaptureSettingsInputs()
+    if Shared == nil or State == nil or type(State.widgets) ~= "table" then
+        return
+    end
+    local settings = getSettings()
+
+    if State.widgets.recruit_textfield ~= nil then
+        settings.last_recruit_message = string.lower(getWidgetText(State.widgets.recruit_textfield))
+    end
+
+    if State.widgets.filter_dropdown ~= nil and State.widgets.filter_dropdown.GetSelectedIndex ~= nil then
+        settings.filter_selection = State.widgets.filter_dropdown:GetSelectedIndex()
+    end
+    if State.widgets.chat_filter_dropdown ~= nil and State.widgets.chat_filter_dropdown.GetSelectedIndex ~= nil then
+        settings.dms_selection = State.widgets.chat_filter_dropdown:GetSelectedIndex()
+    end
+    if State.widgets.active_whitelist_dropdown ~= nil and State.widgets.active_whitelist_dropdown.GetSelectedIndex ~= nil then
+        local index = State.widgets.active_whitelist_dropdown:GetSelectedIndex()
+        local selected = State.widgets.active_whitelist_dropdown.dropdownItem ~= nil and State.widgets.active_whitelist_dropdown.dropdownItem[index] or nil
+        if selected ~= nil then
+            settings.active_whitelist = tostring(selected)
+        end
+    end
+
+    if State.widgets.expedition_sync_name_input ~= nil then
+        settings.expedition_sync_name = trimText(getWidgetText(State.widgets.expedition_sync_name_input))
+    end
+    if State.widgets.lead_code_word_input ~= nil then
+        settings.lead_code_word = trimText(getWidgetText(State.widgets.lead_code_word_input))
+        if settings.lead_code_word == "" then
+            settings.lead_code_word = "give lead"
+        end
+    end
+    if State.widgets.give_lead_whitelist_input ~= nil then
+        settings.give_lead_whitelist = Shared.ParseCommaList(getWidgetText(State.widgets.give_lead_whitelist_input), Utils.FormatName)
+        if Runtime ~= nil and Runtime.RebuildGiveLeadWhitelistLookup ~= nil then
+            Runtime.RebuildGiveLeadWhitelistLookup()
+        end
+    end
+
+    if State.widgets.raid_sort_mode_dropdown ~= nil and State.widgets.raid_sort_mode_dropdown.GetSelectedIndex ~= nil then
+        local ids = State.raid_sort_preset_ids or {}
+        local selected = ids[State.widgets.raid_sort_mode_dropdown:GetSelectedIndex()]
+        if selected ~= nil then
+            settings.raid_sort_preset = selected
+            local builtinMode = tonumber(string.match(selected, "^builtin:(%d+)$"))
+            if builtinMode ~= nil then
+                settings.raid_sort_mode = builtinMode
+            end
+        end
+    end
+    if State.widgets.raid_sort_builder_name_input ~= nil then
+        local draft = readRaidSortBuilderPresetFromWidgets()
+        settings.raid_sort_builder_draft = draft
+        local key = normalizeKey(draft.name)
+        if key ~= "" then
+            if type(settings.raid_custom_sort_presets) ~= "table" then
+                settings.raid_custom_sort_presets = {}
+            end
+            local oldKey = State.raid_sort_builder_key or ""
+            if oldKey ~= "" and oldKey ~= key then
+                settings.raid_custom_sort_presets[oldKey] = nil
+            end
+            settings.raid_custom_sort_presets[key] = draft
+            settings.raid_sort_preset = "custom:" .. key
+            State.raid_sort_builder_key = key
+        end
+    end
+
+    Shared.NormalizeAutoInviteSettings(settings)
+    Shared.NormalizeRaidSortSettings(settings)
+end
+
+local function buildRaidSortBuilderWindow()
+    if State.widgets.raid_sort_builder_window ~= nil then
+        return State.widgets.raid_sort_builder_window
+    end
+
+    local window = nil
+    if api.Interface ~= nil and api.Interface.CreateEmptyWindow ~= nil then
+        window = api.Interface:CreateEmptyWindow("nuziRaidtoolsSortBuilderWindow", "UIParent")
+    elseif api.Interface ~= nil and api.Interface.CreateWindow ~= nil then
+        window = api.Interface:CreateWindow("nuziRaidtoolsSortBuilderWindow", "Raid Sort Presets", 0, 0)
+    end
+    if window == nil then
+        return nil
+    end
+
+    window:SetExtent(430, 430)
+    if State.widgets.settings_window ~= nil then
+        safeAddAnchor(window, "TOPLEFT", State.widgets.settings_window, "TOPRIGHT", 12, 0)
+    else
+        safeAddAnchor(window, "CENTER", "UIParent", nil, 0, 0)
+    end
+    applyPanelBackground(window, 0.94)
+    applyPanelAccent(window, 36, 0.10)
+    applyPanelDivider(window, 36, 12, -12, 0.14)
+    safeShow(window, false)
+    State.widgets.raid_sort_builder_window = window
+
+    local title = createThemedLabel(window, "nuziRaidtoolsSortBuilderTitle", "Raid Sort Presets", 15, 260, 18, "title")
+    if title ~= nil then
+        title:AddAnchor("TOPLEFT", window, 14, 8)
+    end
+
+    local closeButton = Utils.CreateButton(window, "nuziRaidtoolsSortBuilderClose", "X", 26, 22)
+    if closeButton ~= nil then
+        closeButton:AddAnchor("TOPRIGHT", window, -10, 6)
+        closeButton:SetHandler("OnClick", function()
+            RaidManagerUi.CaptureSettingsInputs()
+            Shared.SaveSettings()
+            refreshRaidSortDropdown()
+            hideRaidSortSlotLayoutWindow()
+            safeShow(State.widgets.raid_sort_builder_window, false)
+        end)
+    end
+
+    local presetLabel = createThemedLabel(window, "nuziRaidtoolsSortBuilderPresetLabel", "Preset", 12, 170, 18, "text")
+    if presetLabel ~= nil then
+        presetLabel:AddAnchor("TOPLEFT", window, 18, 52)
+    end
+    local presetDropdown = Utils.CreateComboBox(window, { "New Preset" }, 190, 30)
+    presetDropdown:AddAnchor("TOPLEFT", window, 18, 72)
+    function presetDropdown:SelectedProc()
+        if self.__nuzi_syncing_builder then
+            return
+        end
+        local ids = State.raid_sort_builder_preset_ids or {}
+        setRaidSortBuilderFields(ids[self:GetSelectedIndex()] or "")
+    end
+    State.widgets.raid_sort_builder_preset_dropdown = presetDropdown
+
+    local nameLabel = createThemedLabel(window, "nuziRaidtoolsSortBuilderNameLabel", "Name", 12, 170, 18, "text")
+    if nameLabel ~= nil then
+        nameLabel:AddAnchor("TOPLEFT", window, 226, 52)
+    end
+    local nameInput = Utils.CreateEditBox(window, "nuziRaidtoolsSortBuilderNameInput", "Preset name", 186, 30, 32)
+    nameInput:AddAnchor("TOPLEFT", window, 226, 72)
+    State.widgets.raid_sort_builder_name_input = nameInput
+
+    local roleHeader = createThemedLabel(window, "nuziRaidtoolsSortBuilderRoleHeader", "Role Priority", 12, 200, 18, "text")
+    if roleHeader ~= nil then
+        roleHeader:AddAnchor("TOPLEFT", window, 18, 116)
+    end
+
+    for index = 1, 4 do
+        local x = index <= 2 and 18 or 226
+        local y = (index == 1 or index == 3) and 136 or 174
+        local label = createThemedLabel(window, "nuziRaidtoolsSortBuilderRole" .. tostring(index) .. "Label", tostring(index), 11, 34, 18, "hint")
+        if label ~= nil then
+            label:AddAnchor("TOPLEFT", window, x, y + 6)
+        end
+        local dropdown = Utils.CreateComboBox(window, RAID_ROLE_ORDER_OPTIONS, 158, 30)
+        dropdown:AddAnchor("TOPLEFT", window, x + 34, y)
+        dropdown:Select(index)
+        State.widgets["raid_sort_builder_role_" .. tostring(index)] = dropdown
+    end
+
+    local gearLabel = createThemedLabel(window, "nuziRaidtoolsSortBuilderGearLabel", "Gearscore", 12, 170, 18, "text")
+    if gearLabel ~= nil then
+        gearLabel:AddAnchor("TOPLEFT", window, 18, 214)
+    end
+    local gearDropdown = Utils.CreateComboBox(window, RAID_GEAR_ORDER_OPTIONS, 190, 30)
+    gearDropdown:AddAnchor("TOPLEFT", window, 18, 234)
+    State.widgets.raid_sort_builder_gear_dropdown = gearDropdown
+
+    local nameOrderLabel = createThemedLabel(window, "nuziRaidtoolsSortBuilderNameOrderLabel", "Tie Breaker", 12, 170, 18, "text")
+    if nameOrderLabel ~= nil then
+        nameOrderLabel:AddAnchor("TOPLEFT", window, 226, 214)
+    end
+    local nameOrderDropdown = Utils.CreateComboBox(window, RAID_NAME_ORDER_OPTIONS, 186, 30)
+    nameOrderDropdown:AddAnchor("TOPLEFT", window, 226, 234)
+    State.widgets.raid_sort_builder_name_dropdown = nameOrderDropdown
+
+    local groupHeader = createThemedLabel(window, "nuziRaidtoolsSortBuilderGroupHeader", "Role Groups", 12, 200, 18, "text")
+    if groupHeader ~= nil then
+        groupHeader:AddAnchor("TOPLEFT", window, 18, 276)
+    end
+    local slotLayoutButton = Utils.CreateButton(window, "nuziRaidtoolsSortBuilderSlotLayout", "Slot Layout", 112, 24)
+    if slotLayoutButton ~= nil then
+        slotLayoutButton:AddAnchor("TOPRIGHT", window, -18, 270)
+        slotLayoutButton:SetHandler("OnClick", function()
+            toggleRaidSortSlotLayout()
+        end)
+    end
+    for role = 1, 4 do
+        local x = role <= 2 and 18 or 226
+        local y = (role == 1 or role == 3) and 296 or 334
+        local label = createThemedLabel(window, "nuziRaidtoolsSortBuilderGroup" .. tostring(role) .. "Label", RAID_ROLE_ORDER_OPTIONS[role], 11, 74, 18, "hint")
+        if label ~= nil then
+            label:AddAnchor("TOPLEFT", window, x, y + 6)
+        end
+        local dropdown = Utils.CreateComboBox(window, RAID_GROUP_OPTIONS, 118, 30)
+        dropdown:AddAnchor("TOPLEFT", window, x + 74, y)
+        State.widgets["raid_sort_builder_group_" .. tostring(role)] = dropdown
+    end
+
+    local newButton = Utils.CreateButton(window, "nuziRaidtoolsSortBuilderNew", "New", 82, 30)
+    newButton:AddAnchor("TOPLEFT", window, 18, 384)
+    newButton:SetHandler("OnClick", function()
+        getSettings().raid_sort_builder_draft = {
+            name = "",
+            role_order = { 1, 2, 3, 4 },
+            role_groups = { 0, 0, 0, 0 },
+            slot_roles = {},
+            gear_order = 1,
+            name_order = 1
+        }
+        setRaidSortBuilderFields("", true)
+        Shared.SaveSettings()
+    end)
+
+    local saveButton = Utils.CreateButton(window, "nuziRaidtoolsSortBuilderSave", "Save", 92, 30)
+    saveButton:AddAnchor("TOPLEFT", window, 110, 384)
+    saveButton:SetHandler("OnClick", function()
+        local settings = getSettings()
+        local draft = readRaidSortBuilderPresetFromWidgets()
+        local name = draft.name
+        if name == "" then
+            Shared.logger:Err("Preset name required.")
+            return
+        end
+        local key = normalizeKey(name)
+        if key == "" then
+            Shared.logger:Err("Preset name required.")
+            return
+        end
+        if type(settings.raid_custom_sort_presets) ~= "table" then
+            settings.raid_custom_sort_presets = {}
+        end
+        local oldKey = State.raid_sort_builder_key or ""
+        if oldKey ~= "" and oldKey ~= key then
+            settings.raid_custom_sort_presets[oldKey] = nil
+        end
+        settings.raid_sort_builder_draft = draft
+        settings.raid_custom_sort_presets[key] = draft
+        settings.raid_sort_preset = "custom:" .. key
+        Shared.NormalizeRaidSortSettings(settings)
+        Shared.SaveSettings()
+        State.raid_sort_builder_key = key
+        refreshRaidSortDropdown()
+        setRaidSortBuilderFields(key)
+        Shared.logger:Info("Saved raid sort preset: " .. name .. ".")
+    end)
+
+    local deleteButton = Utils.CreateButton(window, "nuziRaidtoolsSortBuilderDelete", "Delete", 92, 30)
+    deleteButton:AddAnchor("TOPLEFT", window, 212, 384)
+    deleteButton:SetHandler("OnClick", function()
+        local settings = getSettings()
+        local key = State.raid_sort_builder_key or ""
+        if key == "" or type(settings.raid_custom_sort_presets) ~= "table" or settings.raid_custom_sort_presets[key] == nil then
+            setRaidSortBuilderFields("")
+            return
+        end
+        local name = tostring(settings.raid_custom_sort_presets[key].name or key)
+        settings.raid_custom_sort_presets[key] = nil
+        if settings.raid_sort_preset == "custom:" .. key then
+            settings.raid_sort_preset = "builtin:" .. tostring(tonumber(settings.raid_sort_mode) or 1)
+        end
+        Shared.NormalizeRaidSortSettings(settings)
+        Shared.SaveSettings()
+        State.raid_sort_builder_key = ""
+        refreshRaidSortDropdown()
+        setRaidSortBuilderFields("")
+        Shared.logger:Info("Deleted raid sort preset: " .. name .. ".")
+    end)
+
+    local closeFooterButton = Utils.CreateButton(window, "nuziRaidtoolsSortBuilderDone", "Done", 92, 30)
+    closeFooterButton:AddAnchor("TOPLEFT", window, 320, 384)
+    closeFooterButton:SetHandler("OnClick", function()
+        RaidManagerUi.CaptureSettingsInputs()
+        Shared.SaveSettings()
+        refreshRaidSortDropdown()
+        hideRaidSortSlotLayoutWindow()
+        safeShow(State.widgets.raid_sort_builder_window, false)
+    end)
+
+    setRaidSortBuilderFields("")
+    return window
+end
+
+function RaidManagerUi.ToggleRaidSortBuilder()
+    local window = buildRaidSortBuilderWindow()
+    if window == nil then
+        return
+    end
+    local show = not isWidgetVisible(window)
+    if show then
+        refreshRaidSortDropdown()
+        local selected = trimText(getSettings().raid_sort_preset)
+        local customKey = string.match(selected, "^custom:(.+)$")
+        setRaidSortBuilderFields(customKey or State.raid_sort_builder_key or "")
+    end
+    safeShow(window, show)
 end
 
 local function buildAttachedRaidManagerSettings(raidManager, settings)
@@ -1667,6 +2393,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         if closeButton ~= nil then
             closeButton:AddAnchor("TOPRIGHT", header, -10, 1)
             closeButton:SetHandler("OnClick", function()
+                RaidManagerUi.CaptureSettingsInputs()
                 settings.settings_panel_visible = false
                 Shared.SaveSettings()
                 RaidManagerUi.SyncSettingsPanelVisibility()
@@ -1723,6 +2450,16 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
     local content = scrollFrame.content
     local cardWidth = 330
     local sectionY = 10
+    local function runRaidAction(action)
+        RaidManagerUi.CaptureSettingsInputs()
+        Shared.SaveSettings()
+        local ok, message = action()
+        if ok then
+            Shared.logger:Info(message)
+        else
+            Shared.logger:Err(message)
+        end
+    end
 
     local autoInviteCard = createSectionCard(
         content,
@@ -1946,7 +2683,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         local guildAutoLearnCheckbox = createCheckboxRow(
             automationCard,
             "nuziRaidtoolsGuildAutoLearn",
-            "Add guild-chat recruit speakers to the active list",
+            "Add guild-chat recruit speakers to Guild Members",
             14,
             152,
             286
@@ -1963,7 +2700,7 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         local expeditionSyncCheckbox = createCheckboxRow(
             automationCard,
             "nuziRaidtoolsExpeditionSync",
-            "Sync active list from current raid expedition",
+            "Add current raid guildies to Guild Members",
             14,
             180,
             286
@@ -2049,6 +2786,62 @@ local function buildAttachedRaidManagerSettings(raidManager, settings)
         State.widgets.role_dropdown = roleDropdown
     end
     sectionY = sectionY + 144
+
+    local raidSortCard = createSectionCard(
+        content,
+        "nuziRaidtoolsRaidSortCard",
+        "Raid Sort",
+        "Arrange raid roles and custom group layouts.",
+        sectionY,
+        cardWidth,
+        176
+    )
+    if raidSortCard ~= nil then
+        local sortModeLabel = createThemedLabel(raidSortCard, "nuziRaidtoolsRaidSortModeLabel", "Sort Mode", 12, 220, 18, "text")
+        if sortModeLabel ~= nil then
+            sortModeLabel:AddAnchor("TOPLEFT", raidSortCard, 14, 68)
+        end
+
+        local presetButton = Utils.CreateButton(raidSortCard, "nuziRaidtoolsSortPresetButton", "Presets", 86, 24)
+        presetButton:AddAnchor("TOPRIGHT", raidSortCard, -14, 62)
+        presetButton:SetHandler("OnClick", function()
+            RaidManagerUi.ToggleRaidSortBuilder()
+        end)
+        State.widgets.raid_sort_preset_button = presetButton
+
+        local sortItems, sortIds = buildRaidSortDropdownItems(settings)
+        State.raid_sort_preset_ids = sortIds
+        local sortModeDropdown = Utils.CreateComboBox(raidSortCard, sortItems, cardWidth - 28, 30)
+        sortModeDropdown:AddAnchor("TOPLEFT", raidSortCard, 14, 88)
+        sortModeDropdown:Select(getRaidSortSelectionIndex(settings, sortIds))
+        function sortModeDropdown:SelectedProc()
+            if self.__nuzi_syncing_sort then
+                return
+            end
+            local ids = State.raid_sort_preset_ids or {}
+            local selected = ids[self:GetSelectedIndex()] or "builtin:1"
+            settings.raid_sort_preset = selected
+            local builtinMode = tonumber(string.match(selected, "^builtin:(%d+)$"))
+            if builtinMode ~= nil then
+                settings.raid_sort_mode = builtinMode
+            end
+            Shared.NormalizeRaidSortSettings(settings)
+            Shared.SaveSettings()
+            refreshRaidSortDropdown()
+        end
+        State.widgets.raid_sort_mode_dropdown = sortModeDropdown
+
+        local sortButton = Utils.CreateButton(raidSortCard, "nuziRaidtoolsSortRaidButton", "Sort", 94, 30)
+        sortButton:AddAnchor("TOPLEFT", raidSortCard, 14, 126)
+        sortButton:SetHandler("OnClick", function()
+            runRaidAction(function()
+                return Runtime.SortRaidBySettings()
+            end)
+        end)
+        State.widgets.raid_sort_button = sortButton
+
+    end
+    sectionY = sectionY + 188
 
     local leadCard = createSectionCard(
         content,

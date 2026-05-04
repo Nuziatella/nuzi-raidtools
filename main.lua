@@ -40,7 +40,7 @@ local ListManager = modules.list_manager
 local addon = Shared ~= nil and Shared.ADDON or {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.3",
+    version = "2.0.18",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -173,6 +173,9 @@ local function onLoad()
 end
 
 local function onUnload()
+    if RaidManagerUi ~= nil and RaidManagerUi.CaptureSettingsInputs ~= nil then
+        RaidManagerUi.CaptureSettingsInputs()
+    end
     if RaidManagerUi ~= nil and RaidManagerUi.CaptureFloatingButtonPosition ~= nil then
         RaidManagerUi.CaptureFloatingButtonPosition()
     end

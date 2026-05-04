@@ -44,10 +44,11 @@ You can also enable list automation if you want selected names to skip the norma
 
 Use `Roster Automation` to:
 
-- add guild-chat recruit speakers to the active whitelist
+- add guild-chat recruit speakers to `Guild Members`
 - invite enabled whitelist members on login or every 60 seconds
-- sync the active whitelist from raid members in a named expedition
+- add current raid guild members to `Guild Members`
 - allow trusted chat stop/start controls for auto-invite
+- save custom raid sort presets with per-slot role layouts
 
 ### List Manager
 
@@ -91,4 +92,4 @@ Less clutter, less squinting, fewer excuses.
 - The addon keeps local settings and list files separate so they survive addon updates more reliably.
 - If something looks wrong after a major update, reload once so the latest saved settings are re-read cleanly.
 
-2.0.3
+2.0.18

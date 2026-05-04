@@ -179,24 +179,7 @@ local function addNameToList(list, name)
     return true
 end
 
-local function removeNameFromList(list, name)
-    if type(list) ~= "table" then
-        return false
-    end
-    local key = normalizeKey(name)
-    if key == "" then
-        return false
-    end
-    for index = #list, 1, -1 do
-        if normalizeKey(list[index]) == key then
-            table.remove(list, index)
-            return true
-        end
-    end
-    return false
-end
-
-local function resolveAutomationWhitelist(settings, create)
+local function resolveNamedWhitelist(settings, listName, create)
     if type(settings) ~= "table" then
         return nil, nil, false
     end
@@ -205,11 +188,9 @@ local function resolveAutomationWhitelist(settings, create)
         settings.whitelists = {}
         changed = true
     end
-    local listName = trimText(settings.active_whitelist)
+    listName = trimText(listName)
     if listName == "" or listName == "Select Whitelist" then
         listName = Shared.CONSTANTS.DEFAULT_AUTOMATION_WHITELIST
-        settings.active_whitelist = listName
-        changed = true
     end
     if type(settings.whitelists[listName]) ~= "table" then
         if not create then
@@ -230,9 +211,13 @@ local function resolveAutomationWhitelist(settings, create)
     return listName, settings.whitelists[listName], changed
 end
 
+local function resolveGuildAutomationWhitelist(settings, create)
+    return resolveNamedWhitelist(settings, Shared.CONSTANTS.DEFAULT_AUTOMATION_WHITELIST, create)
+end
+
 function Runtime.AddNameToAutomationWhitelist(name)
     local settings = getSettings()
-    local listName, list = resolveAutomationWhitelist(settings, true)
+    local listName, list = resolveGuildAutomationWhitelist(settings, true)
     if type(list) ~= "table" then
         return false
     end
@@ -450,16 +435,24 @@ local function queueLoginInvite(name)
     return true
 end
 
-local function readTeamMemberInfo(index)
-    if api.Unit == nil or api.Unit.GetUnitId == nil then
+local function readUnitTokenUnitId(unitToken)
+    if unitToken == nil or unitToken == "" or api.Unit == nil or api.Unit.GetUnitId == nil then
         return nil
     end
     local unitId = nil
     pcall(function()
-        unitId = api.Unit:GetUnitId("team" .. tostring(index))
+        unitId = api.Unit:GetUnitId(unitToken)
     end)
-    unitId = normalizeUnitId(unitId)
-    if unitId == nil or api.Unit.GetUnitInfoById == nil then
+    return normalizeUnitId(unitId)
+end
+
+local function readTeamMemberUnitId(index)
+    return readUnitTokenUnitId("team" .. tostring(index))
+end
+
+local function readTeamMemberInfo(index)
+    local unitId = readTeamMemberUnitId(index)
+    if unitId == nil or api.Unit == nil or api.Unit.GetUnitInfoById == nil then
         return nil
     end
     local info = nil
@@ -502,6 +495,455 @@ function Runtime.CanSendRaidInvites()
         return true
     end
     return false
+end
+
+local function readTeamMemberRole(index)
+    if api.Team == nil or api.Team.GetRole == nil then
+        return 4
+    end
+    local role = nil
+    pcall(function()
+        role = api.Team:GetRole(index)
+    end)
+    role = tonumber(role)
+    if role == 1 or role == 2 or role == 3 or role == 4 then
+        return role
+    end
+    return 4
+end
+
+local function readUnitInfo(unitToken, unitId)
+    local info = nil
+    local infoById = nil
+    if api.Unit ~= nil and api.Unit.UnitInfo ~= nil then
+        pcall(function()
+            info = api.Unit:UnitInfo(unitToken)
+        end)
+    end
+    if unitId ~= nil and api.Unit ~= nil and api.Unit.GetUnitInfoById ~= nil then
+        pcall(function()
+            infoById = api.Unit:GetUnitInfoById(unitId)
+        end)
+    end
+    return info, infoById
+end
+
+local function readUnitName(unitToken, unitId, info, infoById)
+    local name = trimText(
+        (type(info) == "table" and (info.name or info.unitName or info.unit_name))
+        or (type(infoById) == "table" and (infoById.name or infoById.unitName or infoById.unit_name))
+        or ""
+    )
+    if name ~= "" then
+        return Utils.FormatName(name)
+    end
+    if api.Unit ~= nil and api.Unit.UnitName ~= nil then
+        pcall(function()
+            name = api.Unit:UnitName(unitToken) or ""
+        end)
+        name = trimText(name)
+        if name ~= "" then
+            return Utils.FormatName(name)
+        end
+    end
+    if unitId ~= nil and api.Unit ~= nil and api.Unit.GetUnitNameById ~= nil then
+        pcall(function()
+            name = api.Unit:GetUnitNameById(unitId) or ""
+        end)
+        name = trimText(name)
+        if name ~= "" then
+            return Utils.FormatName(name)
+        end
+    end
+    return ""
+end
+
+local function readUnitClassName(unitToken, info, infoById)
+    local className = ""
+    if api.Ability ~= nil and api.Ability.GetUnitClassName ~= nil then
+        local ok, value = pcall(function()
+            return api.Ability:GetUnitClassName(unitToken)
+        end)
+        value = trimText(value)
+        if ok and value ~= "" then
+            return value
+        end
+    end
+    className = trimText(
+        (type(info) == "table" and (info.className or info.class_name or info.unitClass or info.unit_class or info.jobName or info.job_name))
+        or (type(infoById) == "table" and (infoById.className or infoById.class_name or infoById.unitClass or infoById.unit_class or infoById.jobName or infoById.job_name))
+        or ""
+    )
+    if className ~= "" then
+        return className
+    end
+    if api.Unit ~= nil and api.Unit.UnitClass ~= nil then
+        local ok, value = pcall(function()
+            return api.Unit:UnitClass(unitToken)
+        end)
+        value = trimText(value)
+        if ok and value ~= "" then
+            return value
+        end
+    end
+    return ""
+end
+
+local function readUnitGearScore(unitToken, unitId)
+    if api.Unit == nil or api.Unit.UnitGearScore == nil then
+        return 0
+    end
+    for _, candidate in ipairs({ unitToken, unitId }) do
+        if candidate ~= nil and candidate ~= "" then
+            local ok, result = pcall(function()
+                return api.Unit:UnitGearScore(candidate)
+            end)
+            result = tonumber(result)
+            if ok and result ~= nil and result > 0 then
+                return math.floor(result + 0.5)
+            end
+        end
+    end
+    return 0
+end
+
+local function collectRaidMembers()
+    local members = {}
+    for index = 1, Shared.CONSTANTS.RAID_MAX_MEMBERS do
+        local unitToken = "team" .. tostring(index)
+        local unitId = readTeamMemberUnitId(index)
+        local info, infoById = readUnitInfo(unitToken, unitId)
+        local name = readUnitName(unitToken, unitId, info, infoById)
+        if unitId ~= nil or name ~= "" then
+            table.insert(members, {
+                index = index,
+                key = unitId or normalizeKey(name) or tostring(index),
+                unit_token = unitToken,
+                unit_id = unitId,
+                name = name,
+                class_name = readUnitClassName(unitToken, info, infoById),
+                role = readTeamMemberRole(index),
+                gear_score = readUnitGearScore(unitToken, unitId)
+            })
+        end
+    end
+    return members
+end
+
+local function getBuiltinSortPreset(sortMode)
+    sortMode = tonumber(sortMode) or 1
+    if sortMode == 2 then
+        return {
+            name = "Healers > Tanks > DPS",
+            role_order = { 2, 1, 3, 4 },
+            gear_order = 1,
+            name_order = 1
+        }
+    end
+    if sortMode == 3 then
+        return {
+            name = "Gearscore High > Low",
+            gear_order = 1,
+            name_order = 1
+        }
+    end
+    if sortMode == 4 then
+        return {
+            name = "Gearscore Low > High",
+            gear_order = 2,
+            name_order = 1
+        }
+    end
+    return {
+        name = "Tanks > Healers > DPS",
+        role_order = { 1, 2, 3, 4 },
+        gear_order = 1,
+        name_order = 1
+    }
+end
+
+local function getSelectedSortPreset()
+    local settings = getSettings()
+    local selectedPreset = trimText(settings.raid_sort_preset or "")
+    local customKey = string.match(selectedPreset, "^custom:(.+)$")
+    if customKey ~= nil
+        and type(settings.raid_custom_sort_presets) == "table"
+        and type(settings.raid_custom_sort_presets[customKey]) == "table" then
+        return settings.raid_custom_sort_presets[customKey]
+    end
+    local builtinMode = tonumber(string.match(selectedPreset, "^builtin:(%d+)$")) or tonumber(settings.raid_sort_mode) or 1
+    return getBuiltinSortPreset(builtinMode)
+end
+
+local function getRoleOrderRank(role, roleOrder)
+    if type(roleOrder) ~= "table" then
+        return nil
+    end
+    for index, candidate in ipairs(roleOrder) do
+        if tonumber(candidate) == role then
+            return index
+        end
+    end
+    return 99
+end
+
+local function sortRaidMembers(members, preset)
+    preset = type(preset) == "table" and preset or getBuiltinSortPreset(1)
+    local gearOrder = tonumber(preset.gear_order) or 1
+    local nameOrder = tonumber(preset.name_order) or 1
+    table.sort(members, function(a, b)
+        local aRank = getRoleOrderRank(a.role, preset.role_order)
+        local bRank = getRoleOrderRank(b.role, preset.role_order)
+        if aRank ~= nil and bRank ~= nil and aRank ~= bRank then
+            return aRank < bRank
+        end
+
+        if gearOrder == 1 then
+            if a.gear_score ~= b.gear_score then
+                return a.gear_score > b.gear_score
+            end
+        elseif gearOrder == 2 then
+            if a.gear_score ~= b.gear_score then
+                return a.gear_score < b.gear_score
+            end
+        end
+
+        if nameOrder == 2 and a.name ~= b.name then
+            return a.name > b.name
+        elseif nameOrder ~= 3 and a.name ~= b.name then
+            return a.name < b.name
+        end
+        return a.index < b.index
+    end)
+end
+
+local function getPresetRoleGroup(preset, role)
+    local roleGroups = type(preset) == "table" and type(preset.role_groups) == "table" and preset.role_groups or nil
+    if roleGroups == nil then
+        return 0
+    end
+    return math.floor((tonumber(roleGroups[role] or roleGroups[tostring(role)]) or 0) + 0.5)
+end
+
+local function presetHasGroupTargets(preset)
+    for role = 1, 4 do
+        local group = getPresetRoleGroup(preset, role)
+        if group >= 1 and group <= Shared.CONSTANTS.RAID_GROUP_COUNT then
+            return true
+        end
+    end
+    return false
+end
+
+local function getPresetSlotRole(preset, slot)
+    local slotRoles = type(preset) == "table" and type(preset.slot_roles) == "table" and preset.slot_roles or nil
+    if slotRoles == nil then
+        return 0
+    end
+    local role = math.floor((tonumber(slotRoles[slot] or slotRoles[tostring(slot)]) or 0) + 0.5)
+    if role >= 1 and role <= 4 then
+        return role
+    end
+    return 0
+end
+
+local function presetHasSlotTargets(preset)
+    for slot = 1, Shared.CONSTANTS.RAID_MAX_MEMBERS do
+        if getPresetSlotRole(preset, slot) > 0 then
+            return true
+        end
+    end
+    return false
+end
+
+local function takeNextSortedMember(sortedMembers, used, role)
+    for _, member in ipairs(sortedMembers) do
+        if not used[member.key] and (role == nil or member.role == role) then
+            used[member.key] = true
+            return member
+        end
+    end
+    return nil
+end
+
+local function buildPresetSlotTargetSlots(sortedMembers, preset)
+    local desiredBySlot = {}
+    local used = {}
+    local maxSlot = Shared.CONSTANTS.RAID_MAX_MEMBERS
+    for slot = 1, maxSlot do
+        local role = getPresetSlotRole(preset, slot)
+        if role > 0 then
+            desiredBySlot[slot] = takeNextSortedMember(sortedMembers, used, role)
+        end
+    end
+
+    for slot = 1, maxSlot do
+        if desiredBySlot[slot] == nil then
+            desiredBySlot[slot] = takeNextSortedMember(sortedMembers, used)
+        end
+    end
+    return desiredBySlot
+end
+
+local function buildPresetTargetSlots(sortedMembers, preset)
+    local roleGroups = type(preset) == "table" and type(preset.role_groups) == "table" and preset.role_groups or nil
+    if roleGroups == nil then
+        return nil
+    end
+
+    local desiredBySlot = {}
+    local used = {}
+    local hasTarget = false
+    local maxSlot = Shared.CONSTANTS.RAID_MAX_MEMBERS
+    for _, member in ipairs(sortedMembers) do
+        local group = getPresetRoleGroup(preset, member.role)
+        if group >= 1 and group <= Shared.CONSTANTS.RAID_GROUP_COUNT then
+            local startSlot = ((group - 1) * Shared.CONSTANTS.RAID_GROUP_SIZE) + 1
+            local endSlot = math.min(startSlot + Shared.CONSTANTS.RAID_GROUP_SIZE - 1, maxSlot)
+            for slot = startSlot, endSlot do
+                if desiredBySlot[slot] == nil then
+                    desiredBySlot[slot] = member
+                    used[member.key] = true
+                    hasTarget = true
+                    break
+                end
+            end
+        end
+    end
+    if not hasTarget then
+        return nil
+    end
+
+    local fillSlot = 1
+    for _, member in ipairs(sortedMembers) do
+        if not used[member.key] then
+            while fillSlot <= maxSlot and desiredBySlot[fillSlot] ~= nil do
+                fillSlot = fillSlot + 1
+            end
+            if fillSlot <= maxSlot then
+                desiredBySlot[fillSlot] = member
+            end
+        end
+    end
+
+    return desiredBySlot
+end
+
+local function moveTeamMemberToSlot(fromSlot, toSlot)
+    if fromSlot == nil or toSlot == nil then
+        return false
+    end
+    if api.Team ~= nil and api.Team.MoveTeamMember ~= nil then
+        local ok, result = pcall(function()
+            return api.Team:MoveTeamMember(fromSlot, toSlot)
+        end)
+        if ok and result ~= false then
+            return true
+        end
+    end
+    return false
+end
+
+local function buildMemberSlotLookup(members)
+    local out = {}
+    for _, member in ipairs(members) do
+        out[member.key] = member.index
+    end
+    return out
+end
+
+local function applyRaidSlotOrder(desiredBySlot)
+    local moved = 0
+    local failed = 0
+    local currentMembers = collectRaidMembers()
+    local currentSlots = buildMemberSlotLookup(currentMembers)
+    for targetSlot = 1, Shared.CONSTANTS.RAID_MAX_MEMBERS do
+        local desired = desiredBySlot[targetSlot]
+        if desired ~= nil then
+            local currentSlot = currentSlots[desired.key]
+            if currentSlot ~= nil and currentSlot ~= targetSlot then
+                local ok = moveTeamMemberToSlot(currentSlot, targetSlot)
+                if ok then
+                    moved = moved + 1
+                    currentMembers = collectRaidMembers()
+                    currentSlots = buildMemberSlotLookup(currentMembers)
+                else
+                    failed = failed + 1
+                end
+            end
+        end
+    end
+    return moved, failed
+end
+
+local function findMemberPosition(members, key)
+    for index, member in ipairs(members) do
+        if member.key == key then
+            return index
+        end
+    end
+    return nil
+end
+
+local function applyRaidOrder(currentMembers, desiredMembers)
+    local moved = 0
+    local failed = 0
+    for targetIndex, desired in ipairs(desiredMembers) do
+        local currentIndex = findMemberPosition(currentMembers, desired.key)
+        if currentIndex ~= nil and currentIndex ~= targetIndex then
+            local ok, result = pcall(function()
+                return api.Team:MoveTeamMember(currentIndex, targetIndex)
+            end)
+            if ok and result ~= false then
+                local member = table.remove(currentMembers, currentIndex)
+                table.insert(currentMembers, targetIndex, member)
+                moved = moved + 1
+            else
+                failed = failed + 1
+            end
+        end
+    end
+    return moved, failed
+end
+
+function Runtime.SortRaidBySettings()
+    if api.Team == nil or api.Team.MoveTeamMember == nil then
+        return false, "Raid sorting API is unavailable."
+    end
+    if not Runtime.IsRaidGeneral() then
+        return false, "Only raid lead can sort the raid."
+    end
+
+    local currentMembers = collectRaidMembers()
+    if #currentMembers < 2 then
+        return false, "Not enough raid members found to sort."
+    end
+
+    local desiredMembers = {}
+    for index, member in ipairs(currentMembers) do
+        desiredMembers[index] = member
+    end
+    local preset = getSelectedSortPreset()
+    sortRaidMembers(desiredMembers, preset)
+
+    local moved, failed = 0, 0
+    if presetHasSlotTargets(preset) then
+        moved, failed = applyRaidSlotOrder(buildPresetSlotTargetSlots(desiredMembers, preset))
+    elseif presetHasGroupTargets(preset) then
+        local desiredBySlot = buildPresetTargetSlots(desiredMembers, preset)
+        if desiredBySlot ~= nil then
+            moved, failed = applyRaidSlotOrder(desiredBySlot)
+        end
+    else
+        moved, failed = applyRaidOrder(currentMembers, desiredMembers)
+    end
+    if failed > 0 then
+        return moved > 0, "Sorted raid with " .. tostring(moved) .. " move(s); " .. tostring(failed) .. " move(s) failed."
+    end
+    if moved == 0 then
+        return true, "Raid already matches the selected sort."
+    end
+    return true, "Sorted raid with " .. tostring(moved) .. " move(s)."
 end
 
 local function extractWhitelistLoginInviteTarget(speakerName, message)
@@ -613,7 +1055,7 @@ function Runtime.RunExpeditionWhitelistSync()
         return
     end
 
-    local listName, list, listChanged = resolveAutomationWhitelist(settings, true)
+    local listName, list, listChanged = resolveGuildAutomationWhitelist(settings, true)
     if type(list) ~= "table" then
         return
     end
@@ -623,12 +1065,8 @@ function Runtime.RunExpeditionWhitelistSync()
         local info = readTeamMemberInfo(index)
         if type(info) == "table" then
             local name = Utils.FormatName(info.name or info.unitName or "")
-            if name ~= "" then
-                if normalizeKey(info.expeditionName or info.expedition_name) == expeditionName then
-                    changed = addNameToList(list, name) or changed
-                else
-                    changed = removeNameFromList(list, name) or changed
-                end
+            if name ~= "" and normalizeKey(info.expeditionName or info.expedition_name) == expeditionName then
+                changed = addNameToList(list, name) or changed
             end
         end
     end
@@ -636,7 +1074,7 @@ function Runtime.RunExpeditionWhitelistSync()
     if changed then
         Shared.SaveSettings()
         Runtime.RebuildEnabledWhitelistLookup()
-        Shared.logger:Info("Synced " .. tostring(listName) .. " from expedition " .. tostring(settings.expedition_sync_name) .. ".")
+        Shared.logger:Info("Updated " .. tostring(listName) .. " from guild " .. tostring(settings.expedition_sync_name) .. ".")
     end
 end
 
@@ -760,6 +1198,17 @@ function Runtime.IsGiveLeadSpeakerAllowed(speakerName)
 end
 
 function Runtime.HandleRemoteAutoInviteCommand(channelId, speakerName, message)
+    if channelId == Shared.CONSTANTS.RAID_CHAT_CHANNEL_ID
+        and message == Shared.CONSTANTS.RAID_STOP_AUTO_INVITE_COMMAND then
+        local settings = getSettings()
+        if settings.is_recruiting then
+            Runtime.SetRecruiting(false)
+            Shared.logger:Info("Auto-invite stopped by " .. Utils.FormatName(speakerName) .. ".")
+            return true
+        end
+        return false
+    end
+
     local settings = getSettings()
     if not settings.remote_auto_invite_controls then
         return false
