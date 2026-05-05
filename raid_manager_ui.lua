@@ -15,6 +15,8 @@ local FloatingButtonPositions = nil
 local FLOATING_ICON_MIN_SIZE = 32
 local FLOATING_ICON_MAX_SIZE = 96
 local FLOATING_ICON_ASPECT = 1.5
+local RAID_MANAGER_SKIN_WIDTH = 900
+local RAID_MANAGER_FALLBACK_HEIGHT = 395
 local RAID_SORT_OPTIONS = {
     "Tanks > Healers > DPS",
     "Healers > Tanks > DPS",
@@ -1746,7 +1748,7 @@ local function patchRaidManagerPartyFrame(raidManager, partyFrame)
         partyFrame["__nuzi_raidtools_original_" .. methodName] = original
         partyFrame[methodName] = function(self, ...)
             pcall(original, self, ...)
-            local stockWidth = tonumber(self.__nuzi_raidtools_stock_width) or 920
+            local stockWidth = tonumber(self.__nuzi_raidtools_stock_width) or RAID_MANAGER_SKIN_WIDTH
             layoutRaidManagerPartyFrame(raidManager, self, tonumber(self.party) or 1, stockWidth)
         end
     end
@@ -1811,7 +1813,7 @@ function RaidManagerUi.PatchRaidManagerMembers(raidManager)
     if type(raidManager) ~= "table" or type(raidManager.party) ~= "table" then
         return
     end
-    local stockWidth = tonumber(raidManager.__nuzi_raidtools_stock_width) or 920
+    local stockWidth = tonumber(raidManager.__nuzi_raidtools_stock_width) or RAID_MANAGER_SKIN_WIDTH
     for partyIndex = 1, 10 do
         local partyFrame = raidManager.party[partyIndex]
         if type(partyFrame) == "table" then
@@ -3081,16 +3083,11 @@ function RaidManagerUi.BuildRaidManagerUi()
     pcall(function()
         State.raid_manager_original_width, State.raid_manager_original_height = raidManager:GetExtent()
     end)
-    local currentWidth = raidManager:GetWidth()
-    if type(currentWidth) ~= "number" or currentWidth <= 0 then
-        currentWidth = tonumber(State.raid_manager_original_width) or 760
-    end
-    local stockExtraWidth = 260
-    local totalWidth = currentWidth + stockExtraWidth
+    local targetHeight = tonumber(State.raid_manager_original_height) or RAID_MANAGER_FALLBACK_HEIGHT
     pcall(function()
-        raidManager:SetExtent(totalWidth, 380)
+        raidManager:SetExtent(RAID_MANAGER_SKIN_WIDTH, targetHeight)
     end)
-    raidManager.__nuzi_raidtools_stock_width = currentWidth + stockExtraWidth
+    raidManager.__nuzi_raidtools_stock_width = RAID_MANAGER_SKIN_WIDTH
     RaidManagerUi.PatchRaidManagerMembers(raidManager)
 
     local settingsToggleButton = Utils.CreateButton(raidManager, "nuziRaidtoolsSettingsToggle", "Show Settings", 110, 26)

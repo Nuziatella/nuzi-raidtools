@@ -1,5 +1,8 @@
 local api = require("api")
 local Core = api._NuziCore or require("nuzi-core/core")
+if Core ~= nil and type(Core.InstallApiGuards) == "function" then
+    Core.InstallApiGuards(api)
+end
 
 local Events = Core.Events
 local Log = Core.Log
@@ -40,7 +43,7 @@ local ListManager = modules.list_manager
 local addon = Shared ~= nil and Shared.ADDON or {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.18",
+    version = "2.0.20",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
