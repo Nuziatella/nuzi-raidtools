@@ -43,7 +43,7 @@ local ListManager = modules.list_manager
 local addon = Shared ~= nil and Shared.ADDON or {
     name = "Nuzi Raidtools",
     author = "Nuzi",
-    version = "2.0.20",
+    version = "2.0.22",
     desc = "Raid recruitment, auto roles, and lead handoff"
 }
 
@@ -165,7 +165,6 @@ local function onLoad()
     Shared.state.events:OnSafe("raid_role_changed", "raid_role_changed", onRoleChanged)
     Shared.state.events:OnSafe("TEAM_MEMBERS_CHANGED", "TEAM_MEMBERS_CHANGED", onTeamChanged)
     Shared.state.events:OnSafe("CHAT_MESSAGE", "CHAT_MESSAGE", onChatMessage)
-    Shared.state.events:OptionalOnSafe("COMMUNITY_CHAT_MESSAGE", "COMMUNITY_CHAT_MESSAGE", onChatMessage)
     Shared.state.events:OnSafe("UPDATE", "UPDATE", onUpdate)
     Shared.state.events:OnSafe("UI_RELOADED", "UI_RELOADED", onUiReloaded)
     Shared.state.private_events = Events.CreateEventWindow({

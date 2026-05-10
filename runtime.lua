@@ -70,18 +70,18 @@ end
 function Runtime.GetCurrentPlayerName()
     local name = ""
     local info = nil
+    if api.Unit ~= nil and api.Unit.UnitName ~= nil then
+        pcall(function()
+            name = api.Unit:UnitName("player") or ""
+        end)
+    end
     if api.Unit ~= nil and api.Unit.UnitInfo ~= nil then
         pcall(function()
             info = api.Unit:UnitInfo("player")
         end)
     end
-    if type(info) == "table" then
+    if name == "" and type(info) == "table" then
         name = tostring(info.name or info.unitName or "")
-    end
-    if name == "" and api.Unit ~= nil and api.Unit.GetUnitName ~= nil then
-        pcall(function()
-            name = api.Unit:GetUnitName("player") or ""
-        end)
     end
     return Utils.FormatName(name)
 end
@@ -237,27 +237,6 @@ function Runtime.GetCurrentCharacterKey()
         return State.current_character_key
     end
 
-    local function resolveUnitName(methodName, unitToken)
-        if api.Unit == nil or type(api.Unit[methodName]) ~= "function" then
-            return ""
-        end
-        local ok, value = pcall(function()
-            return api.Unit[methodName](api.Unit, unitToken)
-        end)
-        value = trimText(value)
-        if ok and value ~= "" then
-            return value
-        end
-        ok, value = pcall(function()
-            return api.Unit[methodName](unitToken)
-        end)
-        value = trimText(value)
-        if ok and value ~= "" then
-            return value
-        end
-        return ""
-    end
-
     local unitId = nil
     local info = nil
     local name = ""
@@ -267,13 +246,11 @@ function Runtime.GetCurrentCharacterKey()
         end)
         unitId = normalizeUnitId(unitId)
     end
-    if name == "" then
-        for _, methodName in ipairs({ "UnitName", "GetUnitName" }) do
-            name = resolveUnitName(methodName, "player")
-            if name ~= "" then
-                break
-            end
-        end
+    if api.Unit ~= nil and api.Unit.UnitName ~= nil then
+        pcall(function()
+            name = api.Unit:UnitName("player") or ""
+        end)
+        name = trimText(name)
     end
     if name == "" and unitId ~= nil and api.Unit ~= nil and api.Unit.GetUnitNameById ~= nil then
         pcall(function()

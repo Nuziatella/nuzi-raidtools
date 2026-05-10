@@ -363,11 +363,11 @@ local function collectCurrentRaidMemberNames()
         end
     end
 
-    if api.Unit ~= nil and api.Unit.GetUnitName ~= nil then
+    if api.Unit ~= nil and api.Unit.UnitName ~= nil then
         for idx = 1, 50 do
             local name = nil
             pcall(function()
-                name = api.Unit:GetUnitName("team" .. tostring(idx))
+                name = api.Unit:UnitName("team" .. tostring(idx))
             end)
             addName(name or "")
         end

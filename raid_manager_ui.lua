@@ -1162,16 +1162,6 @@ local function getRaidUnitClass(unitToken, info, infoById)
         return className
     end
 
-    if api.Unit ~= nil and api.Unit.GetUnitClassName ~= nil then
-        local ok, value = pcall(function()
-            return api.Unit:GetUnitClassName(unitToken)
-        end)
-        value = trimText(value)
-        if ok and value ~= "" then
-            return value
-        end
-    end
-
     if api.Ability ~= nil and api.Ability.GetUnitClassName ~= nil then
         local ok, value = pcall(function()
             return api.Ability:GetUnitClassName(unitToken)
@@ -1186,15 +1176,6 @@ local function getRaidUnitClass(unitToken, info, infoById)
         local okClass, classId = pcall(function()
             return api.Unit:UnitClass(unitToken)
         end)
-        if okClass and classId ~= nil and api.Unit.GetUnitClassName ~= nil then
-            local okName, value = pcall(function()
-                return api.Unit:GetUnitClassName(classId)
-            end)
-            value = trimText(value)
-            if okName and value ~= "" then
-                return value
-            end
-        end
         if okClass then
             return trimText(classId)
         end
@@ -1525,25 +1506,13 @@ local function ensureStockMemberNameLabel(memberFrame)
 end
 
 local function getRaidUnitDisplayName(unitToken, unitId, info, infoById)
-    if api.Unit ~= nil and unitToken ~= nil and unitToken ~= "" then
-        for _, methodName in ipairs({ "UnitName", "GetUnitName" }) do
-            if type(api.Unit[methodName]) == "function" then
-                local ok, value = pcall(function()
-                    return api.Unit[methodName](api.Unit, unitToken)
-                end)
-                value = trimText(value)
-                if ok and value ~= "" then
-                    return value
-                end
-
-                ok, value = pcall(function()
-                    return api.Unit[methodName](unitToken)
-                end)
-                value = trimText(value)
-                if ok and value ~= "" then
-                    return value
-                end
-            end
+    if api.Unit ~= nil and api.Unit.UnitName ~= nil and unitToken ~= nil and unitToken ~= "" then
+        local ok, value = pcall(function()
+            return api.Unit:UnitName(unitToken)
+        end)
+        value = trimText(value)
+        if ok and value ~= "" then
+            return value
         end
     end
 
